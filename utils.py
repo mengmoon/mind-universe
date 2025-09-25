@@ -10,10 +10,8 @@ def init_firebase():
     if not firebase_config:
         raise ValueError("FIREBASE_CONFIG not set in environment")
     try:
-        # Check if Firebase app is already initialized
         firebase_admin.get_app(name="[DEFAULT]")
     except ValueError:
-        # Initialize Firebase if not already initialized
         try:
             cred = credentials.Certificate(json.loads(firebase_config))
             firebase_admin.initialize_app(cred, {
