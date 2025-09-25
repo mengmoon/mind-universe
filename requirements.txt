@@ -1,0 +1,6 @@
+streamlit==1.38.0 
+firebase-admin==6.5.0 
+requests==2.32.3 
+python-dotenv==1.0.1 
+nltk==3.9.1 
+transformers==4.44.2
