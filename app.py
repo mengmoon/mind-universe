@@ -21,28 +21,6 @@ API_KEY = "AIzaSyCid3kfk0GyvpDl1Up_kwqTVh8U-nbB1Zw"  # Replace with your actual 
 SIGN_IN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={API_KEY}"
 SIGN_UP_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={API_KEY}"
 
-# At the top of chat.py
-try:
-    import ollama
-    def psychodynamic_chat(user_input):
-        # Your existing Ollama logic
-        response = ollama.chat(model='llama3', messages=[{'role': 'user', 'content': user_input}])
-        return response['message']['content']
-except ImportError:
-    import nltk
-    from nltk.sentiment.vader import SentimentIntensityAnalyzer
-    nltk.download('vader_lexicon')
-    def psychodynamic_chat(user_input):
-        sid = SentimentIntensityAnalyzer()
-        scores = sid.polarity_scores(user_input)
-        if scores['compound'] > 0:
-            return "You seem positive! Keep it up with some mindfulness exercises."
-        elif scores['compound'] < 0:
-            return "It sounds tough. Try journaling or deep breathing to relax."
-        else:
-            return "I'm here to help! Try sharing more or relaxing with deep breaths."
-
-
 
 st.sidebar.title("Mind Universe")
 menu = st.sidebar.radio("Navigate", ["Login", "Journal", "Chat"])
@@ -99,3 +77,17 @@ if menu == "Chat":
                 'response': response
             })
             st.write(response)
+
+
+import firebase_admin
+from firebase_admin import credentials
+import os
+from dotenv import load_dotenv
+load_dotenv()
+firebase_config = os.getenv("FIREBASE_CONFIG")
+if not firebase_admin.get_app():
+    try:
+        cred = credentials.Certificate(json.loads(firebase_config))
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        print(f"Firebase initialization failed: {str(e)}")
