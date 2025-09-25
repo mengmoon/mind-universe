@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Mind-Universe
 
 A modern, scalable application template for web, data, and AI development.
@@ -38,3 +39,6 @@ A modern, scalable application template for web, data, and AI development.
 
 ---
 This template is a starting point. Customize technologies and structure as needed for your use case.
+=======
+# mind-universe
+>>>>>>> c1dfeab3f0f5dca3f53d7a6b163c4a524b51e02e
