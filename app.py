@@ -1,99 +1,103 @@
 import streamlit as st
 from utils import (
-    firebase_sign_in,
-    firebase_sign_up,
-    save_journal_entry,
-    get_journal_history,
-    save_chat_message,
-    get_chat_history,
+    save_journal,
+    get_journals,
+    signup_user,
+    login_user,
+    save_chat,
+    get_chats,
     generate_ai_reply,
 )
 
-st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
-
-st.title("🌌 Mind Universe")
-st.write("Welcome to Mind Universe — explore your inner world with AI mentors.")
-
-
 # ----------------------
-# Login / Signup Section
+# Session State
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
-if st.session_state.user is None:
-    st.subheader("🔐 Login / Sign Up")
 
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+# ----------------------
+# Login / Signup Screen
+# ----------------------
+def login_screen():
+    st.title("🔐 Mind Universe Login")
 
-    with tab1:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
+    choice = st.radio("Choose an option:", ["Login", "Sign Up"])
+
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    if choice == "Sign Up":
+        if st.button("Create Account"):
+            result = signup_user(email, password)
+            if result:
+                st.session_state.user = result
+                st.success("✅ Account created! You are now logged in.")
+                st.rerun()
+            else:
+                st.error("❌ Sign up failed. Try again.")
+    else:  # Login
         if st.button("Login"):
-            user = firebase_sign_in(email, password)
-            if user:
-                st.session_state.user = user
-                st.success("✅ Logged in successfully")
+            result = login_user(email, password)
+            if result:
+                st.session_state.user = result
+                st.success("✅ Logged in successfully!")
                 st.rerun()
             else:
-                st.error("❌ Invalid email or password")
+                st.error("❌ Invalid email or password.")
 
-    with tab2:
-        new_email = st.text_input("New Email", key="signup_email")
-        new_password = st.text_input("New Password", type="password", key="signup_password")
-        if st.button("Sign Up"):
-            user = firebase_sign_up(new_email, new_password)
-            if user:
-                st.session_state.user = user
-                st.success("✅ Account created and logged in")
-                st.rerun()
-            else:
-                st.error("❌ Failed to create account")
 
-else:
-    st.success(f"✅ Logged in as {st.session_state.user['email']}")
+# ----------------------
+# Journal Screen
+# ----------------------
+def journal_screen(user):
+    st.subheader("📓 Your Journal")
+    entry = st.text_area("Write your thoughts here...")
 
-    # ----------------------
-    # Journal Section
-    # ----------------------
-    st.subheader("📝 Journal")
-    journal_text = st.text_area("Write your thoughts here...")
+    if st.button("Save Entry"):
+        save_journal(user["localId"], entry)
+        st.success("✅ Journal entry saved!")
 
-    if st.button("Save Journal Entry"):
-        if journal_text.strip():
-            save_journal_entry(st.session_state.user["uid"], journal_text)
-            st.success("✅ Journal entry saved.")
-        else:
-            st.warning("⚠️ Please write something before saving.")
+    st.write("### Recent Entries")
+    history = get_journals(user["localId"])
+    for h in history:
+        st.markdown(f"- {h['text']} ({h.get('timestamp')})")
 
-    history = get_journal_history(st.session_state.user["uid"])
-    if history:
-        st.write("### 📜 Journal History")
-        for entry in history:
-            st.write(f"- {entry['timestamp']}: {entry['text']}")
 
-    # ----------------------
-    # Chat Section
-    # ----------------------
-    st.subheader("🤖 AI Mentor Chat")
-    user_message = st.text_input("Ask something or share your thoughts...", key="chat_input")
+# ----------------------
+# Chat Screen
+# ----------------------
+def chat_screen(user):
+    st.subheader("💬 AI Mentor Chat")
 
+    chats = get_chats(user["localId"])
+    for c in chats:
+        st.markdown(f"**{c['role'].capitalize()}:** {c['text']}")
+
+    user_msg = st.text_input("Your message:")
     if st.button("Send"):
-        if user_message.strip():
-            save_chat_message(st.session_state.user["uid"], "user", user_message)
-            ai_reply = generate_ai_reply(user_message)
-            save_chat_message(st.session_state.user["uid"], "mentor", ai_reply)
-            st.success("✅ Reply generated")
-        else:
-            st.warning("⚠️ Please type a message before sending.")
+        if user_msg.strip():
+            save_chat(user["localId"], "user", user_msg)
+            ai_reply = generate_ai_reply(user_msg)
+            save_chat(user["localId"], "mentor", ai_reply)
+            st.rerun()
 
-    chat_history = get_chat_history(st.session_state.user["uid"])
-    if chat_history:
-        st.write("### 💬 Chat History")
-        for msg in chat_history:
-            role = "🧑 You" if msg["role"] == "user" else "✨ Mentor"
-            st.write(f"**{role}:** {msg['text']}")
 
-    if st.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
+# ----------------------
+# Main App
+# ----------------------
+def main():
+    if not st.session_state.user:
+        login_screen()
+    else:
+        st.sidebar.success(f"Logged in as {st.session_state.user.get('email', 'Unknown')}")
+        page = st.sidebar.radio("Navigate", ["Journal", "Chat"])
+
+        if page == "Journal":
+            journal_screen(st.session_state.user)
+        elif page == "Chat":
+            chat_screen(st.session_state.user)
+
+
+if __name__ == "__main__":
+    main()
