@@ -23,22 +23,26 @@ if "user" not in st.session_state:
 # Firebase Initialization
 # ----------------------
 try:
-    firebase_config = st.secrets["FIREBASE_CONFIG"]  # TOML table is a dict-like object
+    firebase_config = dict(st.secrets["FIREBASE_CONFIG"])  # Convert SecretDict to dict
     if not isinstance(firebase_config, dict):
         raise ValueError("FIREBASE_CONFIG must be a dictionary")
 except KeyError as e:
     st.error(f"Missing secret key: {e}")
     st.write("Available secrets:", list(st.secrets.keys()))
     raise
+except Exception as e:
+    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
+    st.write("Available secrets:", list(st.secrets.keys()))
+    raise
 
 if not firebase_admin._apps:  # Prevent duplicate initialization
     try:
-        cred = credentials.Certificate(dict(firebase_config))  # Convert SecretDict to dict
+        cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("Firebase Admin SDK Initialized Successfully")  # Debug output
+        st.write("Firebase Admin SDK Initialized Successfully")
     except ValueError as e:
         st.error(f"Failed to initialize Firebase Admin SDK: {e}")
-        st.write(f"FIREBASE_CONFIG contents: {dict(firebase_config)}")
+        st.write(f"FIREBASE_CONFIG contents: {firebase_config}")
         raise
 
 db = firestore.client()
