@@ -14,7 +14,7 @@ st.title("🌌 Mind Universe")
 st.write("Explore your inner world with AI mentors.")
 
 # ----------------------
-# Session State Initialization
+# Session State
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -37,7 +37,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ----------------------
-# Firebase Auth (REST API)
+# Firebase Auth REST
 # ----------------------
 FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY", "")
 
@@ -48,15 +48,14 @@ def signup_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
     try:
-        res = requests.post(url, data=payload)
+        res = requests.post(url, json=payload)
         if res.status_code == 200:
             return res.json()
         else:
-            error = res.json().get("error", {})
-            st.error(f"❌ Sign up failed: {error.get('message', 'Unknown error')}")
+            st.error(f"❌ Sign up failed: {res.json().get('error', {}).get('message', 'Unknown')}")
             return None
     except Exception as e:
-        st.error(f"❌ Network error during sign up: {e}")
+        st.error(f"❌ Network error: {e}")
         return None
 
 def login_user(email, password):
@@ -66,104 +65,90 @@ def login_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
     try:
-        res = requests.post(url, data=payload)
+        res = requests.post(url, json=payload)
         if res.status_code == 200:
             return res.json()
         else:
-            error = res.json().get("error", {})
-            st.error(f"❌ Login failed: {error.get('message', 'Unknown error')}")
+            st.error(f"❌ Login failed: {res.json().get('error', {}).get('message', 'Unknown')}")
             return None
     except Exception as e:
-        st.error(f"❌ Network error during login: {e}")
+        st.error(f"❌ Network error: {e}")
         return None
 
 # ----------------------
-# Journal Functions
+# Firestore Functions
 # ----------------------
 def save_journal(user_id, text):
     try:
+        print("Saving journal:", user_id, text)  # Debug print
         db.collection("journals").add({
             "uid": user_id,
             "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP,
+            "timestamp": firestore.SERVER_TIMESTAMP
         })
-        st.success("✅ Journal entry saved")
+        st.success("✅ Journal saved")
     except Exception as e:
         st.error(f"Failed to save journal: {e}")
 
 def get_journals(user_id):
     try:
-        # Fetch without order_by to avoid index dependency
-        docs = db.collection("journals").where("uid", "==", user_id).limit(10).stream()
+        docs = db.collection("journals").where("uid", "==", user_id).limit(20).stream()
         journals = []
         for d in docs:
             data = d.to_dict()
-            timestamp = data.get("timestamp")
+            ts = data.get("timestamp")
             journals.append({
                 "text": data.get("text", "[No Text]"),
-                "timestamp": timestamp
+                "timestamp": ts
             })
-        # Sort client-side by timestamp (descending)
-        journals.sort(key=lambda x: x["timestamp"] or datetime.min if x["timestamp"] else datetime.min, reverse=True)
-        # Format for display
-        formatted_journals = []
-        for entry in journals[:10]:  # Limit after sorting
-            formatted_time = entry["timestamp"].to_datetime().strftime("%Y-%m-%d %H:%M:%S") if entry["timestamp"] else "Unknown time"
-            formatted_journals.append({
-                "text": entry["text"],
-                "timestamp": formatted_time
-            })
-        return formatted_journals
+        # Sort descending
+        journals.sort(key=lambda x: x["timestamp"].to_datetime() if x["timestamp"] else datetime.min, reverse=True)
+        formatted = []
+        for j in journals[:10]:
+            formatted_time = j["timestamp"].to_datetime().strftime("%Y-%m-%d %H:%M:%S") if j["timestamp"] else "Unknown time"
+            formatted.append({"text": j["text"], "timestamp": formatted_time})
+        return formatted
     except Exception as e:
-        st.warning(f"Could not fetch journals: {e}. If this persists, ensure Firestore indexes are set up in your Firebase console.")
+        st.warning(f"Could not fetch journals: {e}")
         return []
 
-# ----------------------
-# Chat Functions
-# ----------------------
 def save_chat(user_id, role, text):
     try:
+        print("Saving chat:", user_id, role, text)  # Debug print
         db.collection("chats").add({
             "uid": user_id,
             "role": role,
             "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP,
+            "timestamp": firestore.SERVER_TIMESTAMP
         })
     except Exception as e:
         st.error(f"Failed to save chat: {e}")
 
 def get_chats(user_id):
     try:
-        # Fetch without order_by to avoid index dependency
-        docs = db.collection("chats").where("uid", "==", user_id).limit(20).stream()
+        docs = db.collection("chats").where("uid", "==", user_id).limit(50).stream()
         chats = []
         for d in docs:
             data = d.to_dict()
-            timestamp = data.get("timestamp")
+            ts = data.get("timestamp")
             chats.append({
                 "role": data.get("role", "unknown"),
                 "text": data.get("text", "[No Text]"),
-                "timestamp": timestamp
+                "timestamp": ts
             })
-        # Sort client-side by timestamp (ascending)
-        chats.sort(key=lambda x: x["timestamp"] or datetime.min if x["timestamp"] else datetime.min)
-        # Format for display
-        formatted_chats = []
-        for msg in chats[:20]:  # Limit after sorting
-            formatted_chats.append({
-                "role": msg["role"],
-                "text": msg["text"]
-            })
-        return formatted_chats
+        # Sort ascending
+        chats.sort(key=lambda x: x["timestamp"].to_datetime() if x["timestamp"] else datetime.min)
+        formatted = [{"role": c["role"], "text": c["text"]} for c in chats[:20]]
+        return formatted
     except Exception as e:
-        st.warning(f"Could not fetch chats: {e}. If this persists, ensure Firestore indexes are set up in your Firebase console.")
+        st.warning(f"Could not fetch chats: {e}")
         return []
 
 # ----------------------
-# AI Reply (placeholder)
+# AI Reply Placeholder
 # ----------------------
 def generate_ai_reply(user_message):
-    return f"I hear you. You shared: '{user_message}'. You're not alone — keep reflecting."
+    return f"I hear you: '{user_message}'. Keep reflecting."
 
 # ----------------------
 # Authentication UI
@@ -193,37 +178,41 @@ else:
                 st.success(f"✅ Logged in as {email}")
 
 # ----------------------
-# Main App Features
+# Main App
 # ----------------------
 if st.session_state.user:
     uid = st.session_state.user["localId"]
 
-    # Journal Section
+    # --- Journal ---
     st.subheader("📝 Journal")
-    journal_text = st.text_area("Write your thoughts here...")
-    if st.button("Save Journal"):
-        if len(journal_text) > 5000:
-            st.warning("⚠️ Journal entry too long (max 5000 characters).")
-        elif journal_text.strip():
-            save_journal(uid, journal_text)
-        else:
-            st.warning("⚠️ Please write something before saving.")
+    with st.form("journal_form"):
+        journal_text = st.text_area("Write your thoughts here...")
+        submitted = st.form_submit_button("Save Journal")
+        if submitted:
+            if len(journal_text) > 5000:
+                st.warning("⚠️ Journal too long (max 5000 chars).")
+            elif journal_text.strip():
+                save_journal(uid, journal_text)
+            else:
+                st.warning("⚠️ Please write something before saving.")
 
     st.subheader("📜 Journal History")
     for entry in get_journals(uid):
         st.markdown(f"- **{entry['timestamp']}**: {entry['text']}")
 
-    # Chat Section
+    # --- Chat ---
     st.subheader("🤖 AI Mentor Chat")
-    user_msg = st.text_input("Say something to your AI mentor:")
-    if st.button("Send"):
-        if len(user_msg) > 5000:
-            st.warning("⚠️ Message too long (max 5000 characters).")
-        elif user_msg.strip():
-            save_chat(uid, "user", user_msg)
-            ai_reply = generate_ai_reply(user_msg)
-            save_chat(uid, "ai", ai_reply)
-            st.success(f"AI: {ai_reply}")
+    with st.form("chat_form", clear_on_submit=True):
+        user_msg = st.text_input("Say something to your AI mentor:")
+        submitted_chat = st.form_submit_button("Send")
+        if submitted_chat:
+            if len(user_msg) > 5000:
+                st.warning("⚠️ Message too long (max 5000 chars).")
+            elif user_msg.strip():
+                save_chat(uid, "user", user_msg)
+                ai_reply = generate_ai_reply(user_msg)
+                save_chat(uid, "ai", ai_reply)
+                st.success(f"AI: {ai_reply}")
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
