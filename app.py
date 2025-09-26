@@ -2,7 +2,6 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
-import json
 from datetime import datetime
 import openai
 
@@ -24,8 +23,6 @@ if "user" not in st.session_state:
 # ----------------------
 try:
     firebase_config = dict(st.secrets["FIREBASE_CONFIG"])  # Convert SecretDict to dict
-    if not isinstance(firebase_config, dict):
-        raise ValueError("FIREBASE_CONFIG must be a dictionary")
 except KeyError as e:
     st.error(f"Missing secret key: {e}")
     st.write("Available secrets:", list(st.secrets.keys()))
