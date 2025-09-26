@@ -1,89 +1,99 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import auth
-from utils import init_firebase
-from analyzer import analyze_journal
-from chat import psychodynamic_chat
-import requests
-import json
-from datetime import datetime
+from utils import (
+    firebase_sign_in,
+    firebase_sign_up,
+    save_journal_entry,
+    get_journal_history,
+    save_chat_message,
+    get_chat_history,
+    generate_ai_reply,
+)
 
-st.set_page_config(page_title="Mind Universe", page_icon="🌌")
+st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
 
-# Initialize Firebase
-try:
-    db, auth = init_firebase()
-except ValueError as e:
-    st.error(f"Firebase initialization failed: {e}")
-    st.stop()
+st.title("🌌 Mind Universe")
+st.write("Welcome to Mind Universe — explore your inner world with AI mentors.")
 
-# Firebase Auth REST API endpoint
-API_KEY = "your-correct-api-key-here"  # Replace with your actual apiKey
-SIGN_IN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={API_KEY}"
-SIGN_UP_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={API_KEY}"
 
-st.sidebar.title("Mind Universe")
-menu = st.sidebar.radio("Navigate", ["Login", "Journal", "Chat"])
+# ----------------------
+# Login / Signup Section
+# ----------------------
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-if menu == "Login":
-    st.header("Welcome to Mind Universe 🌌")
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        try:
-            response = requests.post(SIGN_IN_URL, json={
-                "email": email,
-                "password": password,
-                "returnSecureToken": True
-            })
-            response.raise_for_status()
-            user = response.json()
-            st.success("Logged in!")
-            st.session_state['user'] = user
-        except requests.exceptions.RequestException as e:
-            st.error(f"Login failed: {e}")
-            st.write("Error details:", response.json())  # Show API error
-    if st.button("Sign Up"):
-        try:
-            user = auth.create_user(email=email, password=password)
-            st.success("Signed up!")
-            st.session_state['user'] = {'localId': user.uid, 'email': email}
-        except Exception as e:
-            st.error(f"Sign up failed: {e}")
+if st.session_state.user is None:
+    st.subheader("🔐 Login / Sign Up")
 
-if menu == "Journal":
-    st.header("Journal Your Thoughts")
-    if 'user' not in st.session_state:
-        st.warning("Please log in first.")
-    else:
-        entry = st.text_area("What's on your mind?")
-        if st.button("Analyze"):
-            analysis = analyze_journal(entry)
-            # Save to Firestore
-            user_id = st.session_state['user']['localId']
-            journal_data = {
-                'entry': entry,
-                'analysis': analysis,
-                'timestamp': datetime.now().isoformat()
-            }
-            db.collection('users').document(user_id).collection('journal').add(journal_data)
-            st.write(analysis)
-            st.success("Journal saved!")
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
-if menu == "Chat":
-    st.header("Talk to Mind Universe")
-    if 'user' not in st.session_state:
-        st.warning("Please log in first.")
-    else:
-        user_input = st.text_input("How can I help you?")
-        if st.button("Send"):
-            response = psychodynamic_chat(user_input)
-            # Save to Firestore
-            user_id = st.session_state['user']['localId']
-            chat_data = {
-                'input': user_input,
-                'response': response,
-                'timestamp': datetime.now().isoformat()
-            }
-            db.collection('users').document(user_id).collection('chat').add(chat_data)
-            st.write(response)
+    with tab1:
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        if st.button("Login"):
+            user = firebase_sign_in(email, password)
+            if user:
+                st.session_state.user = user
+                st.success("✅ Logged in successfully")
+                st.rerun()
+            else:
+                st.error("❌ Invalid email or password")
+
+    with tab2:
+        new_email = st.text_input("New Email", key="signup_email")
+        new_password = st.text_input("New Password", type="password", key="signup_password")
+        if st.button("Sign Up"):
+            user = firebase_sign_up(new_email, new_password)
+            if user:
+                st.session_state.user = user
+                st.success("✅ Account created and logged in")
+                st.rerun()
+            else:
+                st.error("❌ Failed to create account")
+
+else:
+    st.success(f"✅ Logged in as {st.session_state.user['email']}")
+
+    # ----------------------
+    # Journal Section
+    # ----------------------
+    st.subheader("📝 Journal")
+    journal_text = st.text_area("Write your thoughts here...")
+
+    if st.button("Save Journal Entry"):
+        if journal_text.strip():
+            save_journal_entry(st.session_state.user["uid"], journal_text)
+            st.success("✅ Journal entry saved.")
+        else:
+            st.warning("⚠️ Please write something before saving.")
+
+    history = get_journal_history(st.session_state.user["uid"])
+    if history:
+        st.write("### 📜 Journal History")
+        for entry in history:
+            st.write(f"- {entry['timestamp']}: {entry['text']}")
+
+    # ----------------------
+    # Chat Section
+    # ----------------------
+    st.subheader("🤖 AI Mentor Chat")
+    user_message = st.text_input("Ask something or share your thoughts...", key="chat_input")
+
+    if st.button("Send"):
+        if user_message.strip():
+            save_chat_message(st.session_state.user["uid"], "user", user_message)
+            ai_reply = generate_ai_reply(user_message)
+            save_chat_message(st.session_state.user["uid"], "mentor", ai_reply)
+            st.success("✅ Reply generated")
+        else:
+            st.warning("⚠️ Please type a message before sending.")
+
+    chat_history = get_chat_history(st.session_state.user["uid"])
+    if chat_history:
+        st.write("### 💬 Chat History")
+        for msg in chat_history:
+            role = "🧑 You" if msg["role"] == "user" else "✨ Mentor"
+            st.write(f"**{role}:** {msg['text']}")
+
+    if st.button("Logout"):
+        st.session_state.user = None
+        st.rerun()
