@@ -1,9 +1,11 @@
+# app.py
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
-import openai
+import json
 from datetime import datetime
+import openai
 
 # ----------------------
 # Page Config
@@ -13,7 +15,7 @@ st.title("🌌 Mind Universe")
 st.write("Explore your inner world with AI mentors.")
 
 # ----------------------
-# Session State Initialization
+# Session State
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -21,145 +23,112 @@ if "user" not in st.session_state:
 # ----------------------
 # Firebase Initialization
 # ----------------------
+firebase_config = st.secrets["FIREBASE_CONFIG"].copy()
+# Convert double-escaped newlines to real newlines
+firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+
 if not firebase_admin._apps:
-    firebase_config = st.secrets["FIREBASE_CONFIG"]  # Already a dict from secrets
     cred = credentials.Certificate(firebase_config)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
 # ----------------------
-# API Keys
+# Firebase Auth via REST API
 # ----------------------
 FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-openai.api_key = OPENAI_API_KEY
 
-# ----------------------
-# Firebase Auth (REST API)
-# ----------------------
 def signup_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
-    try:
-        res = requests.post(url, data=payload)
-        data = res.json()
-        if res.status_code == 200:
-            return data
-        else:
-            st.error(f"❌ Sign up failed: {data.get('error', {}).get('message', 'Unknown error')}")
-            return None
-    except Exception as e:
-        st.error(f"❌ Network error during sign up: {e}")
+    res = requests.post(url, json=payload)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        error = res.json().get("error", {}).get("message", "Unknown error")
+        st.error(f"Sign up failed: {error}")
         return None
 
 def login_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
-    try:
-        res = requests.post(url, data=payload)
-        data = res.json()
-        if res.status_code == 200:
-            return data
-        else:
-            st.error(f"❌ Login failed: {data.get('error', {}).get('message', 'Unknown error')}")
-            return None
-    except Exception as e:
-        st.error(f"❌ Network error during login: {e}")
+    res = requests.post(url, json=payload)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        error = res.json().get("error", {}).get("message", "Unknown error")
+        st.error(f"Login failed: {error}")
         return None
 
 # ----------------------
 # Firestore Functions
 # ----------------------
-def save_journal(user_id, text):
-    try:
-        db.collection("journals").add({
-            "uid": user_id,
-            "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
-        st.success("✅ Journal entry saved")
-    except Exception as e:
-        st.error(f"Failed to save journal: {e}")
+def save_journal(uid, text):
+    db.collection("journals").add({
+        "uid": uid,
+        "text": text,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    })
 
-def get_journals(user_id):
-    try:
-        docs = db.collection("journals").where("uid", "==", user_id).limit(50).stream()
-        journals = []
-        for d in docs:
-            data = d.to_dict()
-            ts = data.get("timestamp")
-            if ts:
-                timestamp = ts.strftime("%Y-%m-%d %H:%M:%S") if isinstance(ts, datetime) else str(ts)
-            else:
-                timestamp = "Unknown time"
-            journals.append({"text": data.get("text", ""), "timestamp": timestamp})
-        # Sort descending
-        journals.sort(key=lambda x: x["timestamp"], reverse=True)
-        return journals
-    except Exception as e:
-        st.warning(f"Could not fetch journals: {e}")
-        return []
+def get_journals(uid):
+    docs = db.collection("journals").where("uid", "==", uid).stream()
+    journals = []
+    for d in docs:
+        data = d.to_dict()
+        ts = data.get("timestamp")
+        formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
+        journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
+    journals.sort(key=lambda x: x["timestamp"], reverse=True)
+    return journals
 
-def save_chat(user_id, role, text):
-    try:
-        db.collection("chats").add({
-            "uid": user_id,
-            "role": role,
-            "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
-    except Exception as e:
-        st.error(f"Failed to save chat: {e}")
+def save_chat(uid, role, text):
+    db.collection("chats").add({
+        "uid": uid,
+        "role": role,
+        "text": text,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    })
 
-def get_chats(user_id):
-    try:
-        docs = db.collection("chats").where("uid", "==", user_id).limit(50).stream()
-        chats = []
-        for d in docs:
-            data = d.to_dict()
-            chats.append({
-                "role": data.get("role", "unknown"),
-                "text": data.get("text", ""),
-                "timestamp": data.get("timestamp")
-            })
-        chats.sort(key=lambda x: x["timestamp"] or datetime.min)
-        return chats
-    except Exception as e:
-        st.warning(f"Could not fetch chats: {e}")
-        return []
+def get_chats(uid):
+    docs = db.collection("chats").where("uid", "==", uid).stream()
+    chats = []
+    for d in docs:
+        data = d.to_dict()
+        chats.append({"role": data.get("role", ""), "text": data.get("text", "")})
+    return chats
 
 # ----------------------
-# AI Mentor System Prompt
+# OpenAI GPT Setup
 # ----------------------
-AI_VOICES_SYSTEM_PROMPT = """
-You are an AI Mentor integrating the voices and psychology of:
-- Sigmund Freud (psychoanalysis, unconscious mind, dreams)
-- Alfred Adler (individual psychology, encouragement, social interest)
-- Carl Jung (archetypes, shadow, collective unconscious)
-- Abraham Maslow (hierarchy of needs, self-actualization)
-- Cognitive Behavioral Therapy (practical problem solving, thoughts/behaviors)
-- Positive Psychology (strengths, optimism, well-being)
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-Respond thoughtfully and empathetically, blending these perspectives as guidance for the user.
+AI_SYSTEM_PROMPT = """
+You are an AI mentor who can switch between these six voices:
+- Freud: psychoanalysis, explore subconscious
+- Adler: individual psychology, encouragement
+- Jung: archetypes, shadow work
+- Maslow: self-actualization guidance
+- Positive Psychology: focus on strengths and well-being
+- CBT: cognitive-behavioral therapy, practical advice
+
+Always provide empathetic, insightful, and reflective responses.
 """
 
-def generate_ai_reply(user_message):
+def generate_ai_reply(user_input):
+    messages = [
+        {"role": "system", "content": AI_SYSTEM_PROMPT},
+        {"role": "user", "content": user_input}
+    ]
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": AI_VOICES_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=300,
-            temperature=0.7
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
         )
-        reply = response['choices'][0]['message']['content'].strip()
-        return reply
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"❌ AI generation error: {e}")
-        return "Sorry, I couldn't generate a response right now."
+        return f"AI failed to respond: {e}"
 
 # ----------------------
 # Authentication UI
@@ -171,22 +140,20 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
-        st.success("✅ Logged out")
-        st.rerun()
+        st.success("Logged out")
+        st.experimental_rerun()
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
     if st.button("Submit"):
         if auth_mode == "Sign Up":
             user = signup_user(email, password)
-            if user:
-                st.session_state.user = user
-                st.success(f"✅ Signed up as {email}")
         else:
             user = login_user(email, password)
-            if user:
-                st.session_state.user = user
-                st.success(f"✅ Logged in as {email}")
+        if user:
+            st.session_state.user = user
+            st.success(f"Logged in as {email}")
+            st.experimental_rerun()
 
 # ----------------------
 # Main App Features
@@ -194,20 +161,22 @@ else:
 if st.session_state.user:
     uid = st.session_state.user["localId"]
 
-    # Journal Section
+    # --- Journal ---
     st.subheader("📝 Journal")
     journal_text = st.text_area("Write your thoughts here...")
     if st.button("Save Journal"):
         if journal_text.strip():
             save_journal(uid, journal_text)
+            st.success("Journal saved")
+            st.experimental_rerun()
         else:
-            st.warning("⚠️ Please write something before saving.")
+            st.warning("Write something before saving.")
 
     st.subheader("📜 Journal History")
     for entry in get_journals(uid):
         st.markdown(f"- **{entry['timestamp']}**: {entry['text']}")
 
-    # Chat Section
+    # --- Chat ---
     st.subheader("🤖 AI Mentor Chat")
     user_msg = st.text_input("Say something to your AI mentor:")
     if st.button("Send"):
@@ -216,6 +185,7 @@ if st.session_state.user:
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
+            st.experimental_rerun()
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
