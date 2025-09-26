@@ -15,36 +15,32 @@ st.title("🌌 Mind Universe")
 st.write("Explore your inner world with AI mentors.")
 
 # ----------------------
-# Session State
+# Session State Initialization
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
+if "refresh" not in st.session_state:
+    st.session_state.refresh = False
 
 # ----------------------
 # Firebase Initialization
 # ----------------------
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except KeyError as e:
-    st.error(f"Missing secret key: {e}")
-    st.write("Available secrets:", list(st.secrets.keys()))
-    raise
-except json.JSONDecodeError as e:
-    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
-    st.write(f"Raw FIREBASE_CONFIG value: {st.secrets.get('FIREBASE_CONFIG', 'Not found')}")
-    raise
+except Exception as e:
+    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
+    st.stop()
 
 if not firebase_admin._apps:
     try:
-        # Proper PEM handling
-        private_key = firebase_config["private_key"].replace("\\n", "\n")
-        firebase_config["private_key"] = private_key
+        # Proper PEM newline handling
+        firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("✅ Firebase Admin SDK Initialized")
+        st.write("Firebase Admin SDK Initialized Successfully")
     except Exception as e:
-        st.error(f"Failed to initialize Firebase: {e}")
-        raise
+        st.error(f"Firebase initialization failed: {e}")
+        st.stop()
 
 db = firestore.client()
 
@@ -53,9 +49,9 @@ db = firestore.client()
 # ----------------------
 try:
     FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
-except KeyError as e:
-    st.error(f"Missing FIREBASE_API_KEY in secrets: {e}")
-    raise
+except KeyError:
+    st.error("FIREBASE_API_KEY missing in secrets.toml")
+    st.stop()
 
 def signup_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
@@ -64,7 +60,7 @@ def signup_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        st.error(res.json().get("error", {}).get("message", "Sign up failed"))
+        st.error(res.json().get("error", {}).get("message", "Unknown error"))
         return None
 
 def login_user(email, password):
@@ -74,7 +70,7 @@ def login_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        st.error(res.json().get("error", {}).get("message", "Login failed"))
+        st.error(res.json().get("error", {}).get("message", "Unknown error"))
         return None
 
 # ----------------------
@@ -93,7 +89,14 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
+        if ts:
+            # Handle timestamp safely
+            if hasattr(ts, "to_datetime"):
+                formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                formatted_ts = str(ts)
+        else:
+            formatted_ts = "Unknown"
         journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
     journals.sort(key=lambda x: x["timestamp"], reverse=True)
     return journals
@@ -107,14 +110,11 @@ def save_chat(uid, role, text):
     })
 
 def get_chats(uid):
-    docs = db.collection("chats").where("uid", "==", uid).stream()
+    docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
     chats = []
     for d in docs:
         data = d.to_dict()
-        ts = data.get("timestamp")
-        formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
-        chats.append({"role": data.get("role", ""), "text": data.get("text", ""), "timestamp": formatted_ts})
-    chats.sort(key=lambda x: x["timestamp"])
+        chats.append({"role": data.get("role", ""), "text": data.get("text", "")})
     return chats
 
 # ----------------------
@@ -122,9 +122,9 @@ def get_chats(uid):
 # ----------------------
 try:
     openai.api_key = st.secrets["OPENAI_API_KEY"]
-except KeyError as e:
-    st.error(f"Missing OPENAI_API_KEY in secrets: {e}")
-    raise
+except KeyError:
+    st.error("OPENAI_API_KEY missing in secrets.toml")
+    st.stop()
 
 AI_SYSTEM_PROMPT = """
 You are an AI mentor who can switch between these six voices:
@@ -164,8 +164,7 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
-        st.success("Logged out")
-        st.experimental_rerun()
+        st.session_state.refresh = True
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
@@ -176,8 +175,7 @@ else:
             user = login_user(email, password)
         if user:
             st.session_state.user = user
-            st.success(f"Logged in as {email}")
-            st.experimental_rerun()
+            st.session_state.refresh = True
 
 # ----------------------
 # Main App Features
@@ -192,7 +190,7 @@ if st.session_state.user:
         if journal_text.strip():
             save_journal(uid, journal_text)
             st.success("Journal saved")
-            st.experimental_rerun()
+            st.session_state.refresh = True
         else:
             st.warning("Write something before saving.")
 
@@ -209,8 +207,15 @@ if st.session_state.user:
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
-            st.experimental_rerun()
+            st.session_state.refresh = True
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
-        st.write(f"**{msg['role']}** ({msg['timestamp']}): {msg['text']}")
+        st.write(f"**{msg['role']}**: {msg['text']}")
+
+# ----------------------
+# Safe rerender at the end
+# ----------------------
+if st.session_state.refresh:
+    st.session_state.refresh = False
+    st.experimental_rerun()
