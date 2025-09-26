@@ -4,6 +4,7 @@ from firebase_admin import credentials, firestore
 import requests
 import json
 import os
+from datetime import datetime
 
 # ----------------------
 # Page Config
@@ -16,19 +17,15 @@ st.write("Explore your inner world with AI mentors.")
 # Firebase Initialization
 # ----------------------
 if not firebase_admin._apps:
-    try:
-        if "FIREBASE_CONFIG" in st.secrets:
-            firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-            cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred)
-        elif os.path.exists("serviceAccountKey.json"):
-            cred = credentials.Certificate("serviceAccountKey.json")
-            firebase_admin.initialize_app(cred)
-        else:
-            st.error("❌ Firebase initialization failed: FIREBASE_CONFIG not set")
-            st.stop()
-    except Exception as e:
-        st.error(f"Firebase initialization error: {e}")
+    if "FIREBASE_CONFIG" in st.secrets:
+        firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+    elif os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+    else:
+        st.error("❌ Firebase initialization failed: FIREBASE_CONFIG not set")
         st.stop()
 
 db = firestore.client()
@@ -54,46 +51,68 @@ def login_user(email, password):
 # Journal Functions
 # ----------------------
 def save_journal(user_id, text):
-    db.collection("journals").add({
-        "uid": user_id,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP,
-    })
+    try:
+        db.collection("journals").add({
+            "uid": user_id,
+            "text": text,
+            "timestamp": firestore.SERVER_TIMESTAMP,
+        })
+        st.success("✅ Journal entry saved")
+    except Exception as e:
+        st.error(f"Failed to save journal: {e}")
 
 def get_journals(user_id):
     try:
         docs = db.collection("journals").where("uid", "==", user_id)\
             .order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
-        return [{"text": d.to_dict()["text"], "timestamp": d.to_dict().get("timestamp")} for d in docs]
+        journals = []
+        for d in docs:
+            data = d.to_dict()
+            # Provide default timestamp if missing
+            journals.append({
+                "text": data.get("text", "[No Text]"),
+                "timestamp": data.get("timestamp", "Unknown time")
+            })
+        return journals
     except Exception as e:
-        st.error(f"Failed to fetch journals: {e}")
+        st.warning(f"Could not fetch journals (may need Firestore index): {e}")
         return []
 
 # ----------------------
 # Chat Functions
 # ----------------------
 def save_chat(user_id, role, text):
-    db.collection("chats").add({
-        "uid": user_id,
-        "role": role,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP,
-    })
+    try:
+        db.collection("chats").add({
+            "uid": user_id,
+            "role": role,
+            "text": text,
+            "timestamp": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as e:
+        st.error(f"Failed to save chat: {e}")
 
 def get_chats(user_id):
     try:
         docs = db.collection("chats").where("uid", "==", user_id)\
             .order_by("timestamp", direction=firestore.Query.ASCENDING).limit(20).stream()
-        return [{"role": d.to_dict()["role"], "text": d.to_dict()["text"]} for d in docs]
+        chats = []
+        for d in docs:
+            data = d.to_dict()
+            chats.append({
+                "role": data.get("role", "unknown"),
+                "text": data.get("text", "[No Text]")
+            })
+        return chats
     except Exception as e:
-        st.error(f"Failed to fetch chats: {e}")
+        st.warning(f"Could not fetch chats (may need Firestore index): {e}")
         return []
 
 # ----------------------
 # AI Reply (placeholder)
 # ----------------------
 def generate_ai_reply(user_message):
-    return f"I hear you. You shared: '{user_message}'. You're not alone — keep reflecting, and we'll explore this together."
+    return f"I hear you. You shared: '{user_message}'. You're not alone — keep reflecting."
 
 # ----------------------
 # Authentication UI
@@ -119,41 +138,34 @@ if st.button("Submit"):
         else:
             st.error("❌ Login failed")
 
+# ----------------------
+# Main App Features
+# ----------------------
 if user:
     uid = user["localId"]
 
-    # ----------------------
-    # Journal UI
-    # ----------------------
+    # Journal Section
     st.subheader("📝 Journal")
     journal_text = st.text_area("Write your thoughts here...")
-
     if st.button("Save Journal"):
         if journal_text.strip():
             save_journal(uid, journal_text)
-            st.success("✅ Journal entry saved")
         else:
             st.warning("⚠️ Please write something before saving.")
 
     st.subheader("📜 Journal History")
     for entry in get_journals(uid):
-        ts = entry["timestamp"].isoformat() if entry["timestamp"] else "Unknown time"
-        st.write(f"- {ts}: {entry['text']}")
+        st.markdown(f"- **{entry['timestamp']}**: {entry['text']}")
 
-    # ----------------------
-    # Chat UI
-    # ----------------------
+    # Chat Section
     st.subheader("🤖 AI Mentor Chat")
     user_msg = st.text_input("Say something to your AI mentor:")
-
     if st.button("Send"):
         if user_msg.strip():
             save_chat(uid, "user", user_msg)
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
-        else:
-            st.warning("⚠️ Type a message before sending.")
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
