@@ -80,7 +80,7 @@ def login_user(email, password):
 # ----------------------
 def save_journal(user_id, text):
     try:
-        print("Saving journal:", user_id, text)  # Debug print
+        print("Saving journal:", user_id, text)
         db.collection("journals").add({
             "uid": user_id,
             "text": text,
@@ -114,7 +114,7 @@ def get_journals(user_id):
 
 def save_chat(user_id, role, text):
     try:
-        print("Saving chat:", user_id, role, text)  # Debug print
+        print("Saving chat:", user_id, role, text)
         db.collection("chats").add({
             "uid": user_id,
             "role": role,
@@ -152,10 +152,36 @@ def get_chats(user_id):
         return []
 
 # ----------------------
-# AI Reply Placeholder
+# AI Mentor Voices
 # ----------------------
+def freud_voice(msg):
+    return f"Freud: This may reflect unconscious conflicts. What hidden feelings could be influencing you?"
+
+def adler_voice(msg):
+    return f"Adler: Consider how this relates to your sense of purpose and striving for significance."
+
+def jung_voice(msg):
+    return f"Jung: Perhaps this is connected to archetypes or your personal shadow. Reflect on your inner patterns."
+
+def positive_psych_voice(msg):
+    return f"Positive Psychology: Focus on your strengths and what went well today. You have the ability to grow."
+
+def cbt_voice(msg):
+    return f"CBT: Let's examine any distorted thoughts here. What evidence supports or contradicts this belief?"
+
+def maslow_voice(msg):
+    return f"Maslow: Consider your current needs hierarchy. Are you addressing basic, psychological, or self-actualization needs?"
+
 def generate_ai_reply(user_message):
-    return f"I hear you: '{user_message}'. Keep reflecting."
+    replies = [
+        freud_voice(user_message),
+        adler_voice(user_message),
+        jung_voice(user_message),
+        positive_psych_voice(user_message),
+        cbt_voice(user_message),
+        maslow_voice(user_message)
+    ]
+    return "\n\n".join(replies)
 
 # ----------------------
 # Authentication UI
@@ -207,8 +233,8 @@ if st.session_state.user:
     for entry in get_journals(uid):
         st.markdown(f"- **{entry['timestamp']}**: {entry['text']}")
 
-    # --- Chat ---
-    st.subheader("🤖 AI Mentor Chat")
+    # --- AI Mentor Chat ---
+    st.subheader("🤖 AI Mentor Chat (Freud, Adler, Jung, Positive Psychology, CBT, Maslow)")
     with st.form("chat_form", clear_on_submit=True):
         user_msg = st.text_input("Say something to your AI mentor:")
         submitted_chat = st.form_submit_button("Send")
@@ -219,7 +245,7 @@ if st.session_state.user:
                 save_chat(uid, "user", user_msg)
                 ai_reply = generate_ai_reply(user_msg)
                 save_chat(uid, "ai", ai_reply)
-                st.success(f"AI: {ai_reply}")
+                st.text_area("AI Mentor Replies:", value=ai_reply, height=250)
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
