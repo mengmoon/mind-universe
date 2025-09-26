@@ -1,103 +1,145 @@
 import streamlit as st
-from utils import (
-    save_journal,
-    get_journals,
-    signup_user,
-    login_user,
-    save_chat,
-    get_chats,
-    generate_ai_reply,
-)
+import firebase_admin
+from firebase_admin import credentials, firestore
+import requests
+import json
+import os
 
 # ----------------------
-# Session State
+# Page Config
 # ----------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-
-# ----------------------
-# Login / Signup Screen
-# ----------------------
-def login_screen():
-    st.title("🔐 Mind Universe Login")
-
-    choice = st.radio("Choose an option:", ["Login", "Sign Up"])
-
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-
-    if choice == "Sign Up":
-        if st.button("Create Account"):
-            result = signup_user(email, password)
-            if result:
-                st.session_state.user = result
-                st.success("✅ Account created! You are now logged in.")
-                st.rerun()
-            else:
-                st.error("❌ Sign up failed. Try again.")
-    else:  # Login
-        if st.button("Login"):
-            result = login_user(email, password)
-            if result:
-                st.session_state.user = result
-                st.success("✅ Logged in successfully!")
-                st.rerun()
-            else:
-                st.error("❌ Invalid email or password.")
-
+st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
+st.title("🌌 Mind Universe")
+st.write("Explore your inner world with AI mentors.")
 
 # ----------------------
-# Journal Screen
+# Firebase Initialization
 # ----------------------
-def journal_screen(user):
-    st.subheader("📓 Your Journal")
-    entry = st.text_area("Write your thoughts here...")
+if not firebase_admin._apps:
+    if "FIREBASE_CONFIG" in st.secrets:
+        firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+    elif os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+    else:
+        st.error("❌ Firebase initialization failed: FIREBASE_CONFIG not set")
+        st.stop()
 
-    if st.button("Save Entry"):
-        save_journal(user["localId"], entry)
-        st.success("✅ Journal entry saved!")
-
-    st.write("### Recent Entries")
-    history = get_journals(user["localId"])
-    for h in history:
-        st.markdown(f"- {h['text']} ({h.get('timestamp')})")
-
+db = firestore.client()
 
 # ----------------------
-# Chat Screen
+# Firebase Auth (REST API)
 # ----------------------
-def chat_screen(user):
-    st.subheader("💬 AI Mentor Chat")
+FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
 
-    chats = get_chats(user["localId"])
-    for c in chats:
-        st.markdown(f"**{c['role'].capitalize()}:** {c['text']}")
+def signup_user(email, password):
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
+    payload = {"email": email, "password": password, "returnSecureToken": True}
+    res = requests.post(url, data=payload)
+    return res.json() if res.status_code == 200 else None
 
-    user_msg = st.text_input("Your message:")
+def login_user(email, password):
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+    payload = {"email": email, "password": password, "returnSecureToken": True}
+    res = requests.post(url, data=payload)
+    return res.json() if res.status_code == 200 else None
+
+# ----------------------
+# Journal Functions
+# ----------------------
+def save_journal(user_id, text):
+    db.collection("journals").add({
+        "uid": user_id,
+        "text": text,
+        "timestamp": firestore.SERVER_TIMESTAMP,
+    })
+
+def get_journals(user_id):
+    docs = db.collection("journals").where("uid", "==", user_id)\
+        .order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
+    return [{"text": d.to_dict()["text"], "timestamp": d.to_dict().get("timestamp")} for d in docs]
+
+# ----------------------
+# Chat Functions
+# ----------------------
+def save_chat(user_id, role, text):
+    db.collection("chats").add({
+        "uid": user_id,
+        "role": role,
+        "text": text,
+        "timestamp": firestore.SERVER_TIMESTAMP,
+    })
+
+def get_chats(user_id):
+    docs = db.collection("chats").where("uid", "==", user_id)\
+        .order_by("timestamp", direction=firestore.Query.ASCENDING).limit(20).stream()
+    return [{"role": d.to_dict()["role"], "text": d.to_dict()["text"]} for d in docs]
+
+# ----------------------
+# AI Reply (placeholder)
+# ----------------------
+def generate_ai_reply(user_message):
+    return f"I hear you. You shared: '{user_message}'. You're not alone — keep reflecting, and we'll explore this together."
+
+# ----------------------
+# Authentication UI
+# ----------------------
+st.subheader("🔐 Login / Sign Up")
+auth_mode = st.radio("Select Action:", ["Login", "Sign Up"])
+
+email = st.text_input("Email")
+password = st.text_input("Password", type="password")
+
+user = None
+if st.button("Submit"):
+    if auth_mode == "Sign Up":
+        user = signup_user(email, password)
+        if user:
+            st.success(f"✅ Signed up as {email}")
+        else:
+            st.error("❌ Sign up failed")
+    else:
+        user = login_user(email, password)
+        if user:
+            st.success(f"✅ Logged in as {email}")
+        else:
+            st.error("❌ Login failed")
+
+if user:
+    uid = user["localId"]
+
+    # ----------------------
+    # Journal UI
+    # ----------------------
+    st.subheader("📝 Journal")
+    journal_text = st.text_area("Write your thoughts here...")
+
+    if st.button("Save Journal"):
+        if journal_text.strip():
+            save_journal(uid, journal_text)
+            st.success("✅ Journal entry saved")
+        else:
+            st.warning("⚠️ Please write something before saving.")
+
+    st.subheader("📜 Journal History")
+    for entry in get_journals(uid):
+        st.write(f"- {entry['text']}")
+
+    # ----------------------
+    # Chat UI
+    # ----------------------
+    st.subheader("🤖 AI Mentor Chat")
+    user_msg = st.text_input("Say something to your AI mentor:")
+
     if st.button("Send"):
         if user_msg.strip():
-            save_chat(user["localId"], "user", user_msg)
+            save_chat(uid, "user", user_msg)
             ai_reply = generate_ai_reply(user_msg)
-            save_chat(user["localId"], "mentor", ai_reply)
-            st.rerun()
+            save_chat(uid, "ai", ai_reply)
+            st.success(f"AI: {ai_reply}")
 
-
-# ----------------------
-# Main App
-# ----------------------
-def main():
-    if not st.session_state.user:
-        login_screen()
-    else:
-        st.sidebar.success(f"Logged in as {st.session_state.user.get('email', 'Unknown')}")
-        page = st.sidebar.radio("Navigate", ["Journal", "Chat"])
-
-        if page == "Journal":
-            journal_screen(st.session_state.user)
-        elif page == "Chat":
-            chat_screen(st.session_state.user)
-
-
-if __name__ == "__main__":
-    main()
+    st.subheader("💬 Chat History")
+    for msg in get_chats(uid):
+        st.write(f"**{msg['role']}**: {msg['text']}")
