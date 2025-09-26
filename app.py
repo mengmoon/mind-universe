@@ -5,6 +5,7 @@ import requests
 import json
 from datetime import datetime
 import openai
+import os
 
 # ----------------------
 # Page Config
@@ -24,20 +25,26 @@ if "user" not in st.session_state:
 # ----------------------
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except Exception as e:
-    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
-    st.stop()
+except KeyError as e:
+    st.error(f"Missing secret key: {e}")
+    st.write("Available secrets:", list(st.secrets.keys()))
+    raise
+except json.JSONDecodeError as e:
+    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
+    st.write(f"Raw FIREBASE_CONFIG value: {st.secrets.get('FIREBASE_CONFIG', 'Not found')}")
+    raise
 
 if not firebase_admin._apps:
     try:
-        # Fix PEM line breaks
-        firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+        # Proper PEM handling
+        private_key = firebase_config["private_key"].replace("\\n", "\n")
+        firebase_config["private_key"] = private_key
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("Firebase Admin SDK Initialized Successfully")
+        st.write("✅ Firebase Admin SDK Initialized")
     except Exception as e:
-        st.error(f"Firebase initialization failed: {e}")
-        st.stop()
+        st.error(f"Failed to initialize Firebase: {e}")
+        raise
 
 db = firestore.client()
 
@@ -48,7 +55,7 @@ try:
     FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
 except KeyError as e:
     st.error(f"Missing FIREBASE_API_KEY in secrets: {e}")
-    st.stop()
+    raise
 
 def signup_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
@@ -57,8 +64,7 @@ def signup_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        error = res.json().get("error", {}).get("message", "Unknown error")
-        st.error(f"Sign up failed: {error}")
+        st.error(res.json().get("error", {}).get("message", "Sign up failed"))
         return None
 
 def login_user(email, password):
@@ -68,8 +74,7 @@ def login_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        error = res.json().get("error", {}).get("message", "Unknown error")
-        st.error(f"Login failed: {error}")
+        st.error(res.json().get("error", {}).get("message", "Login failed"))
         return None
 
 # ----------------------
@@ -88,7 +93,7 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
+        formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
         journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
     journals.sort(key=lambda x: x["timestamp"], reverse=True)
     return journals
@@ -106,7 +111,10 @@ def get_chats(uid):
     chats = []
     for d in docs:
         data = d.to_dict()
-        chats.append({"role": data.get("role", ""), "text": data.get("text", "")})
+        ts = data.get("timestamp")
+        formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "Unknown"
+        chats.append({"role": data.get("role", ""), "text": data.get("text", ""), "timestamp": formatted_ts})
+    chats.sort(key=lambda x: x["timestamp"])
     return chats
 
 # ----------------------
@@ -116,7 +124,7 @@ try:
     openai.api_key = st.secrets["OPENAI_API_KEY"]
 except KeyError as e:
     st.error(f"Missing OPENAI_API_KEY in secrets: {e}")
-    st.stop()
+    raise
 
 AI_SYSTEM_PROMPT = """
 You are an AI mentor who can switch between these six voices:
@@ -157,7 +165,7 @@ if st.session_state.user:
     if st.button("Logout"):
         st.session_state.user = None
         st.success("Logged out")
-        st.stop()
+        st.experimental_rerun()
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
@@ -169,7 +177,7 @@ else:
         if user:
             st.session_state.user = user
             st.success(f"Logged in as {email}")
-            st.stop()
+            st.experimental_rerun()
 
 # ----------------------
 # Main App Features
@@ -184,7 +192,7 @@ if st.session_state.user:
         if journal_text.strip():
             save_journal(uid, journal_text)
             st.success("Journal saved")
-            st.stop()
+            st.experimental_rerun()
         else:
             st.warning("Write something before saving.")
 
@@ -201,8 +209,8 @@ if st.session_state.user:
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
-            st.stop()
+            st.experimental_rerun()
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
-        st.write(f"**{msg['role']}**: {msg['text']}")
+        st.write(f"**{msg['role']}** ({msg['timestamp']}): {msg['text']}")
