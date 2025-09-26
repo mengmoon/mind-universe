@@ -1,88 +1,108 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
-import requests
 import json
+import requests
 
-# ----------------------
+# --------------------------
 # Firebase Initialization
-# ----------------------
+# --------------------------
 if not firebase_admin._apps:
-    if "firebase_service_account" in st.secrets:
-        cred = credentials.Certificate(dict(st.secrets["firebase_service_account"]))
+    if "FIREBASE_CONFIG" in st.secrets:
+        firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
+        cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
     else:
-        raise ValueError("❌ Firebase initialization failed: firebase_service_account not set in secrets.toml")
+        raise ValueError("❌ FIREBASE_CONFIG missing in Streamlit secrets")
 
 db = firestore.client()
 
-# ----------------------
-# Firebase Auth (via REST API)
-# ----------------------
-FIREBASE_API_KEY = st.secrets["firebase"]["api_key"]
+# Firebase API key (for REST auth)
+FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
 
-def firebase_sign_up(email, password):
+# OpenAI API key
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+
+
+# --------------------------
+# Firestore Helpers
+# --------------------------
+def add_user(uid: str, user_data: dict):
+    """Add or update user profile in Firestore."""
+    try:
+        db.collection("users").document(uid).set(user_data, merge=True)
+        return True
+    except Exception as e:
+        st.error(f"Error adding user: {e}")
+        return False
+
+
+def get_user(uid: str):
+    """Fetch a user profile by UID."""
+    try:
+        doc = db.collection("users").document(uid).get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+    except Exception as e:
+        st.error(f"Error getting user: {e}")
+        return None
+
+
+def save_journal(uid: str, journal_data: dict):
+    """Save a journal entry for a user."""
+    try:
+        db.collection("users").document(uid).collection("journals").add(journal_data)
+        return True
+    except Exception as e:
+        st.error(f"Error saving journal: {e}")
+        return False
+
+
+def get_journals(uid: str):
+    """Fetch all journal entries for a user."""
+    try:
+        docs = db.collection("users").document(uid).collection("journals").stream()
+        return [doc.to_dict() | {"id": doc.id} for doc in docs]
+    except Exception as e:
+        st.error(f"Error getting journals: {e}")
+        return []
+
+
+# --------------------------
+# Firebase Auth via REST API
+# --------------------------
+def signup_user(email: str, password: str):
+    """Sign up a new user with email + password (Firebase Auth REST)."""
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
-    res = requests.post(url, json=payload)
-    return res.json() if res.status_code == 200 else None
+    res = requests.post(url, data=payload)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        st.error(res.json().get("error", {}).get("message", "Signup failed"))
+        return None
 
-def firebase_sign_in(email, password):
+
+def login_user(email: str, password: str):
+    """Log in a user with email + password (Firebase Auth REST)."""
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
-    res = requests.post(url, json=payload)
-    return res.json() if res.status_code == 200 else None
+    res = requests.post(url, data=payload)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        st.error(res.json().get("error", {}).get("message", "Login failed"))
+        return None
 
-# ----------------------
-# Journal Functions
-# ----------------------
-def save_journal_entry(user_id, text):
-    db.collection("journals").add({
-        "uid": user_id,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP,
-    })
 
-def get_journal_history(user_id):
-    docs = (
-        db.collection("journals")
-        .where("uid", "==", user_id)
-        .order_by("timestamp", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
-    return [
-        {"text": d.to_dict()["text"], "timestamp": d.to_dict().get("timestamp")}
-        for d in docs
-    ]
-
-# ----------------------
-# Chat Functions
-# ----------------------
-def save_chat_message(user_id, role, text):
-    db.collection("chats").add({
-        "uid": user_id,
-        "role": role,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP,
-    })
-
-def get_chat_history(user_id):
-    docs = (
-        db.collection("chats")
-        .where("uid", "==", user_id)
-        .order_by("timestamp", direction=firestore.Query.ASCENDING)
-        .limit(20)
-        .stream()
-    )
-    return [
-        {"role": d.to_dict()["role"], "text": d.to_dict()["text"]}
-        for d in docs
-    ]
-
-# ----------------------
-# AI Reply (placeholder)
-# ----------------------
-def generate_ai_reply(user_message):
-    # ✅ For now just return a supportive response
-    return f"I hear you. It sounds important that you shared: '{user_message}'. You're not alone — keep reflecting, and we'll explore this together."
+def verify_id_token(id_token: str):
+    """Verify Firebase ID token via REST API."""
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={FIREBASE_API_KEY}"
+    payload = {"idToken": id_token}
+    res = requests.post(url, data=payload)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        st.error(res.json().get("error", {}).get("message", "Token verification failed"))
+        return None
