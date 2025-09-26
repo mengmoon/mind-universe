@@ -2,6 +2,7 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
+import json
 from datetime import datetime
 import openai
 
@@ -22,10 +23,14 @@ if "user" not in st.session_state:
 # Firebase Initialization
 # ----------------------
 try:
-    firebase_config = dict(st.secrets["FIREBASE_CONFIG"])  # Convert SecretDict to dict
+    firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])  # Parse JSON string to dict
 except KeyError as e:
     st.error(f"Missing secret key: {e}")
     st.write("Available secrets:", list(st.secrets.keys()))
+    raise
+except json.JSONDecodeError as e:
+    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
+    st.write(f"Raw FIREBASE_CONFIG value: {st.secrets.get('FIREBASE_CONFIG', 'Not found')}")
     raise
 except Exception as e:
     st.error(f"Failed to load FIREBASE_CONFIG: {e}")
