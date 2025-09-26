@@ -102,11 +102,11 @@ def get_journals(user_id):
                 "timestamp": ts
             })
         # Sort descending
-        journals.sort(key=lambda x: x["timestamp"].to_datetime() if x["timestamp"] else datetime.min, reverse=True)
+        journals.sort(key=lambda x: x["timestamp"] or datetime.min, reverse=True)
         formatted = []
         for j in journals[:10]:
-            formatted_time = j["timestamp"].to_datetime().strftime("%Y-%m-%d %H:%M:%S") if j["timestamp"] else "Unknown time"
-            formatted.append({"text": j["text"], "timestamp": formatted_time})
+            ts_str = j["timestamp"].strftime("%Y-%m-%d %H:%M:%S") if j["timestamp"] else "Unknown time"
+            formatted.append({"text": j["text"], "timestamp": ts_str})
         return formatted
     except Exception as e:
         st.warning(f"Could not fetch journals: {e}")
@@ -137,8 +137,15 @@ def get_chats(user_id):
                 "timestamp": ts
             })
         # Sort ascending
-        chats.sort(key=lambda x: x["timestamp"].to_datetime() if x["timestamp"] else datetime.min)
-        formatted = [{"role": c["role"], "text": c["text"]} for c in chats[:20]]
+        chats.sort(key=lambda x: x["timestamp"] or datetime.min)
+        formatted = []
+        for c in chats[:20]:
+            ts_str = c["timestamp"].strftime("%Y-%m-%d %H:%M:%S") if c["timestamp"] else "Unknown time"
+            formatted.append({
+                "role": c["role"],
+                "text": c["text"],
+                "timestamp": ts_str
+            })
         return formatted
     except Exception as e:
         st.warning(f"Could not fetch chats: {e}")
