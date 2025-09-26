@@ -5,6 +5,7 @@ import requests
 import json
 import os
 from datetime import datetime
+import openai
 
 # ----------------------
 # Page Config
@@ -80,7 +81,6 @@ def login_user(email, password):
 # ----------------------
 def save_journal(user_id, text):
     try:
-        print("Saving journal:", user_id, text)
         db.collection("journals").add({
             "uid": user_id,
             "text": text,
@@ -101,7 +101,6 @@ def get_journals(user_id):
                 "text": data.get("text", "[No Text]"),
                 "timestamp": ts
             })
-        # Sort descending
         journals.sort(key=lambda x: x["timestamp"] or datetime.min, reverse=True)
         formatted = []
         for j in journals[:10]:
@@ -114,7 +113,6 @@ def get_journals(user_id):
 
 def save_chat(user_id, role, text):
     try:
-        print("Saving chat:", user_id, role, text)
         db.collection("chats").add({
             "uid": user_id,
             "role": role,
@@ -136,7 +134,6 @@ def get_chats(user_id):
                 "text": data.get("text", "[No Text]"),
                 "timestamp": ts
             })
-        # Sort ascending
         chats.sort(key=lambda x: x["timestamp"] or datetime.min)
         formatted = []
         for c in chats[:20]:
@@ -152,36 +149,38 @@ def get_chats(user_id):
         return []
 
 # ----------------------
-# AI Mentor Voices
+# OpenAI GPT Integration for AI Mentor
 # ----------------------
-def freud_voice(msg):
-    return f"Freud: This may reflect unconscious conflicts. What hidden feelings could be influencing you?"
+openai.api_key = st.secrets.get("OPENAI_API_KEY")
 
-def adler_voice(msg):
-    return f"Adler: Consider how this relates to your sense of purpose and striving for significance."
+SYSTEM_PROMPT = """
+You are an AI mentor integrating six perspectives:
 
-def jung_voice(msg):
-    return f"Jung: Perhaps this is connected to archetypes or your personal shadow. Reflect on your inner patterns."
+1. Freud: Analyze unconscious motives and hidden feelings.
+2. Adler: Focus on purpose, social connection, and striving for significance.
+3. Jung: Include archetypes, shadow work, and inner patterns.
+4. Maslow: Evaluate current needs hierarchy from basic to self-actualization.
+5. Positive Psychology: Focus on strengths, gratitude, and personal growth.
+6. CBT: Identify cognitive distortions and suggest rational reframing.
 
-def positive_psych_voice(msg):
-    return f"Positive Psychology: Focus on your strengths and what went well today. You have the ability to grow."
-
-def cbt_voice(msg):
-    return f"CBT: Let's examine any distorted thoughts here. What evidence supports or contradicts this belief?"
-
-def maslow_voice(msg):
-    return f"Maslow: Consider your current needs hierarchy. Are you addressing basic, psychological, or self-actualization needs?"
+Respond naturally, integrating all six voices into helpful, reflective advice.
+"""
 
 def generate_ai_reply(user_message):
-    replies = [
-        freud_voice(user_message),
-        adler_voice(user_message),
-        jung_voice(user_message),
-        positive_psych_voice(user_message),
-        cbt_voice(user_message),
-        maslow_voice(user_message)
-    ]
-    return "\n\n".join(replies)
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=400,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"AI reply failed: {e}")
+        return "Sorry, I couldn't generate a response at this time."
 
 # ----------------------
 # Authentication UI
@@ -234,7 +233,7 @@ if st.session_state.user:
         st.markdown(f"- **{entry['timestamp']}**: {entry['text']}")
 
     # --- AI Mentor Chat ---
-    st.subheader("🤖 AI Mentor Chat (Freud, Adler, Jung, Positive Psychology, CBT, Maslow)")
+    st.subheader("🤖 AI Mentor Chat (Dynamic GPT with 6 Voices)")
     with st.form("chat_form", clear_on_submit=True):
         user_msg = st.text_input("Say something to your AI mentor:")
         submitted_chat = st.form_submit_button("Send")
@@ -245,7 +244,7 @@ if st.session_state.user:
                 save_chat(uid, "user", user_msg)
                 ai_reply = generate_ai_reply(user_msg)
                 save_chat(uid, "ai", ai_reply)
-                st.text_area("AI Mentor Replies:", value=ai_reply, height=250)
+                st.text_area("AI Mentor Reply:", value=ai_reply, height=250)
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
