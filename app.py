@@ -5,7 +5,6 @@ import requests
 import json
 from datetime import datetime
 import openai
-import os
 
 # ----------------------
 # Page Config
@@ -15,42 +14,48 @@ st.title("🌌 Mind Universe")
 st.write("Explore your inner world with AI mentors.")
 
 # ----------------------
-# Session State Initialization
+# Session State
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 if "refresh" not in st.session_state:
     st.session_state.refresh = False
 
+def safe_rerun():
+    st.session_state.refresh = False
+    st.experimental_rerun()
+
 # ----------------------
 # Firebase Initialization
 # ----------------------
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except Exception as e:
-    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
-    st.stop()
+except KeyError as e:
+    st.error(f"Missing secret key: {e}")
+    raise
+except json.JSONDecodeError as e:
+    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
+    raise
 
 if not firebase_admin._apps:
     try:
-        # Proper PEM newline handling
+        # Proper PEM handling: replace escaped \n with actual newlines
         firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("Firebase Admin SDK Initialized Successfully")
+        st.info("Firebase Admin SDK Initialized Successfully")
     except Exception as e:
         st.error(f"Firebase initialization failed: {e}")
-        st.stop()
+        raise
 
 db = firestore.client()
 
 # ----------------------
 # Firebase Auth via REST API
 # ----------------------
-try:
-    FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
-except KeyError:
-    st.error("FIREBASE_API_KEY missing in secrets.toml")
+FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
+if not FIREBASE_API_KEY:
+    st.error("FIREBASE_API_KEY not found in secrets.toml")
     st.stop()
 
 def signup_user(email, password):
@@ -60,7 +65,8 @@ def signup_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        st.error(res.json().get("error", {}).get("message", "Unknown error"))
+        error = res.json().get("error", {}).get("message", "Unknown error")
+        st.error(f"Sign up failed: {error}")
         return None
 
 def login_user(email, password):
@@ -70,7 +76,8 @@ def login_user(email, password):
     if res.status_code == 200:
         return res.json()
     else:
-        st.error(res.json().get("error", {}).get("message", "Unknown error"))
+        error = res.json().get("error", {}).get("message", "Unknown error")
+        st.error(f"Login failed: {error}")
         return None
 
 # ----------------------
@@ -89,14 +96,8 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        if ts:
-            # Handle timestamp safely
-            if hasattr(ts, "to_datetime"):
-                formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                formatted_ts = str(ts)
-        else:
-            formatted_ts = "Unknown"
+        # Convert Firestore timestamp to datetime safely
+        formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
         journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
     journals.sort(key=lambda x: x["timestamp"], reverse=True)
     return journals
@@ -110,7 +111,7 @@ def save_chat(uid, role, text):
     })
 
 def get_chats(uid):
-    docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
+    docs = db.collection("chats").where("uid", "==", uid).stream()
     chats = []
     for d in docs:
         data = d.to_dict()
@@ -120,10 +121,9 @@ def get_chats(uid):
 # ----------------------
 # OpenAI GPT Setup
 # ----------------------
-try:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-except KeyError:
-    st.error("OPENAI_API_KEY missing in secrets.toml")
+openai.api_key = st.secrets.get("OPENAI_API_KEY")
+if not openai.api_key:
+    st.error("OPENAI_API_KEY not found in secrets.toml")
     st.stop()
 
 AI_SYSTEM_PROMPT = """
@@ -164,18 +164,19 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
+        st.success("Logged out")
         st.session_state.refresh = True
+        safe_rerun()
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
     if st.button("Submit"):
-        if auth_mode == "Sign Up":
-            user = signup_user(email, password)
-        else:
-            user = login_user(email, password)
+        user = signup_user(email, password) if auth_mode == "Sign Up" else login_user(email, password)
         if user:
             st.session_state.user = user
+            st.success(f"Logged in as {email}")
             st.session_state.refresh = True
+            safe_rerun()
 
 # ----------------------
 # Main App Features
@@ -191,6 +192,7 @@ if st.session_state.user:
             save_journal(uid, journal_text)
             st.success("Journal saved")
             st.session_state.refresh = True
+            safe_rerun()
         else:
             st.warning("Write something before saving.")
 
@@ -208,14 +210,8 @@ if st.session_state.user:
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
             st.session_state.refresh = True
+            safe_rerun()
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
         st.write(f"**{msg['role']}**: {msg['text']}")
-
-# ----------------------
-# Safe rerender at the end
-# ----------------------
-if st.session_state.refresh:
-    st.session_state.refresh = False
-    st.experimental_rerun()
