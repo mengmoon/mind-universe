@@ -215,7 +215,7 @@ def authentication_ui():
                 # Fetch data immediately after successful login
                 fetch_journals(user["localId"])
                 fetch_chats(user["localId"])
-                st.experimental_rerun() # Use rerun only here to force UI refresh post-login
+                st.rerun() # Use rerun only here to force UI refresh post-login
 
 # ----------------------
 # Main Application Flow
@@ -233,7 +233,7 @@ else:
         st.session_state.chat_messages = []
         st.session_state.journals = []
         st.success("Logged out")
-        st.experimental_rerun()
+        st.rerun()
 
     # --- Main Tabs ---
     tab_journal, tab_chat = st.tabs(["📝 Journaling", "🤖 AI Mentor"])
@@ -292,4 +292,4 @@ else:
                 save_chat(uid, "ai", ai_reply)
             
             # Rerun to update the chat history with the new messages
-            st.experimental_rerun()
+            st.rerun()
