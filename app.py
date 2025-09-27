@@ -71,7 +71,7 @@ db = firestore.client()
 FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
 
 # ----------------------
-# Firebase Auth via REST API (No changes needed here)
+# Firebase Auth via REST API
 # ----------------------
 @st.cache_resource
 def get_auth_url(endpoint):
@@ -221,7 +221,7 @@ def export_history(journals, chats):
 
 
 # ----------------------
-# Gemini API Functions (UPDATED FIX)
+# Gemini API Functions 
 # ----------------------
 def generate_ai_reply(user_input, chat_history):
     """Generates an AI response using the Gemini REST API."""
@@ -259,7 +259,6 @@ def generate_ai_reply(user_input, chat_history):
 
     payload = {
         "contents": messages,
-        # *** FIX APPLIED HERE: Changed 'config' to 'generationConfig' ***
         "generationConfig": {
             "temperature": 0.7,
             "maxOutputTokens": 500
@@ -279,7 +278,7 @@ def generate_ai_reply(user_input, chat_history):
                 
                 result = response.json()
                 
-                # Extract text from the response
+                # Extract the primary candidate object
                 candidate = result.get('candidates', [{}])[0]
                 text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
                 
@@ -287,9 +286,21 @@ def generate_ai_reply(user_input, chat_history):
                     return text
                 else:
                     # Handle cases where API returns status 200 but content is empty or blocked
-                    safety_ratings = candidate.get('safetyRatings', 'N/A')
-                    st.error(f"Gemini API returned no text. Safety Check: {safety_ratings}")
-                    return "The AI mentor's response was filtered due to safety settings or was empty."
+                    finish_reason = candidate.get('finishReason', 'UNKNOWN')
+                    
+                    if finish_reason == 'SAFETY':
+                        safety_info = candidate.get('safetyRatings', 'N/A')
+                        st.error(f"⚠️ Content Blocked: The AI response was filtered due to safety settings. Finish Reason: {finish_reason}. Safety Details: {safety_info}")
+                        return "The AI mentor's response was filtered due to safety settings. Please rephrase your query to ensure it aligns with content guidelines."
+                    
+                    elif finish_reason == 'MAX_TOKENS':
+                        st.error(f"⚠️ Response Too Long: The AI response was cut off because it reached the maximum token limit (500). Finish Reason: {finish_reason}.")
+                        return "The AI mentor's response was too long. Please try a more specific question."
+                        
+                    else:
+                        st.error(f"Gemini API returned no text. Finish Reason: {finish_reason}. Raw Candidate: {candidate}")
+                        return "The AI mentor's response was empty or incomplete."
+
 
         except requests.exceptions.HTTPError as e:
             error_code = response.status_code
@@ -331,7 +342,7 @@ def generate_ai_reply(user_input, chat_history):
 
 
 # ----------------------
-# Authentication UI (No changes needed here)
+# Authentication UI
 # ----------------------
 def authentication_ui():
     """Displays the login/signup form."""
@@ -361,7 +372,7 @@ def authentication_ui():
                 st.rerun() # Use rerun only here to force UI refresh post-login
 
 # ----------------------
-# Main Application Flow (Minor adjustments for new role name)
+# Main Application Flow
 # ----------------------
 
 if st.session_state.user is None:
