@@ -5,7 +5,7 @@ import requests
 import json
 from datetime import datetime
 import openai
-from openai.error import APIError, RateLimitError, AuthenticationError, OpenAIError
+from openai.error import OpenAIError  # Only import OpenAIError
 
 # ----------------------
 # Page Config
@@ -142,12 +142,13 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except RateLimitError:
-        return "AI is temporarily unavailable due to quota limits. Please try again later."
-    except AuthenticationError:
-        return "Authentication error: Please check your OpenAI API key."
-    except APIError as e:
-        return f"OpenAI API error: {e}"
+    except OpenAIError as e:
+        msg = str(e)
+        if "Rate limit" in msg:
+            return "AI is temporarily unavailable due to quota limits. Please try again later."
+        if "Invalid API key" in msg or "Unauthorized" in msg:
+            return "Authentication error: Please check your OpenAI API key."
+        return f"OpenAI API error: {msg}"
     except Exception as e:
         return f"Unexpected error: {type(e).__name__} - {e}"
 
