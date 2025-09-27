@@ -5,20 +5,22 @@ import requests
 import json
 from datetime import datetime
 import openai
-from openai.error import OpenAIError  # Only import OpenAIError
 
 # ----------------------
 # Page Config
 # ----------------------
 st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
 st.title("🌌 Mind Universe")
-st.write("Explore your inner world with AI mentors.")
+st.subtitle("Explore your inner world with AI mentors.")
 
 # ----------------------
 # Session State
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
+
+def safe_rerun():
+    st.rerun()
 
 # ----------------------
 # Firebase Initialization
@@ -27,13 +29,14 @@ try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
 except KeyError as e:
     st.error(f"Missing secret key: {e}")
-    st.stop()
+    raise
 except json.JSONDecodeError as e:
     st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
-    st.stop()
+    raise
 
 if not firebase_admin._apps:
     try:
+        # Fix PEM formatting: replace literal "\n" with actual newline
         if "private_key" in firebase_config:
             firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
@@ -41,7 +44,7 @@ if not firebase_admin._apps:
         st.success("Firebase Admin SDK Initialized")
     except ValueError as e:
         st.error(f"Failed to initialize Firebase: {e}")
-        st.stop()
+        raise
 
 db = firestore.client()
 
@@ -55,20 +58,22 @@ def signup_user(email, password):
     payload = {"email": email, "password": password, "returnSecureToken": True}
     res = requests.post(url, json=payload)
     if res.status_code == 200:
-        return res.json(), None
+        return res.json()
     else:
         error = res.json().get("error", {}).get("message", "Unknown error")
-        return None, error
+        st.error(f"Sign up failed: {error}")
+        return None
 
 def login_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
     res = requests.post(url, json=payload)
     if res.status_code == 200:
-        return res.json(), None
+        return res.json()
     else:
         error = res.json().get("error", {}).get("message", "Unknown error")
-        return None, error
+        st.error(f"Login failed: {error}")
+        return None
 
 # ----------------------
 # Firestore Functions
@@ -142,13 +147,12 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except OpenAIError as e:
-        msg = str(e)
-        if "Rate limit" in msg:
+    except openai.APIError as e:
+        if e.http_status == 429:
             return "AI is temporarily unavailable due to quota limits. Please try again later."
-        if "Invalid API key" in msg or "Unauthorized" in msg:
-            return "Authentication error: Please check your OpenAI API key."
-        return f"OpenAI API error: {msg}"
+        return f"AI failed to respond: {e}"
+    except openai.AuthenticationError as e:
+        return f"Authentication error: Please check your OpenAI API key. Error: {e}"
     except Exception as e:
         return f"Unexpected error: {type(e).__name__} - {e}"
 
@@ -163,19 +167,19 @@ if st.session_state.user:
     if st.button("Logout"):
         st.session_state.user = None
         st.success("Logged out")
+        safe_rerun()
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
     if st.button("Submit"):
         if auth_mode == "Sign Up":
-            user, error = signup_user(email, password)
+            user = signup_user(email, password)
         else:
-            user, error = login_user(email, password)
-        if error:
-            st.error(f"{auth_mode} failed: {error}")
-        elif user:
+            user = login_user(email, password)
+        if user:
             st.session_state.user = user
             st.success(f"Logged in as {email}")
+            safe_rerun()
 
 # ----------------------
 # Main App Features
@@ -190,6 +194,7 @@ if st.session_state.user:
         if journal_text.strip():
             save_journal(uid, journal_text)
             st.success("Journal saved")
+            safe_rerun()
         else:
             st.warning("Write something before saving.")
 
@@ -199,15 +204,15 @@ if st.session_state.user:
 
     # --- Chat ---
     st.subheader("🤖 AI Mentor Chat")
-    with st.form("chat_form", clear_on_submit=True):
-        user_msg = st.text_input("Say something to your AI mentor:")
-        submit = st.form_submit_button("Send")
-        if submit and user_msg.strip():
+    user_msg = st.text_input("Say something to your AI mentor:")
+    if st.button("Send"):
+        if user_msg.strip():
             save_chat(uid, "user", user_msg)
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
+            safe_rerun()
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
-        st.write(f"**{msg['role']}**: {msg['text']}")
+        st.write(f"**{msg['role'].capitalize()}**: {msg['text']}")
