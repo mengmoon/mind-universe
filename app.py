@@ -18,11 +18,6 @@ st.write("Explore your inner world with AI mentors.")
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
-if "rerender" not in st.session_state:
-    st.session_state.rerender = False
-
-def safe_rerun():
-    st.session_state.rerender = True
 
 # ----------------------
 # Firebase Initialization
@@ -31,93 +26,106 @@ try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
 except KeyError as e:
     st.error(f"Missing secret key: {e}")
-    raise
+    st.stop()
 except json.JSONDecodeError as e:
     st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
-    raise
+    st.stop()
 
 if not firebase_admin._apps:
     try:
-        # Fix PEM formatting: replace literal "\n" with actual newline
         if "private_key" in firebase_config:
             firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.success("Firebase Admin SDK Initialized")
+        st.success("✅ Firebase Admin SDK Initialized")
     except ValueError as e:
         st.error(f"Failed to initialize Firebase: {e}")
-        raise
+        st.stop()
 
 db = firestore.client()
-
-# ----------------------
-# Firebase Auth via REST API
-# ----------------------
 FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
 
+# ----------------------
+# Firebase Auth Functions
+# ----------------------
 def signup_user(email, password):
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
-    payload = {"email": email, "password": password, "returnSecureToken": True}
-    res = requests.post(url, json=payload)
-    if res.status_code == 200:
+    try:
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
+        payload = {"email": email, "password": password, "returnSecureToken": True}
+        res = requests.post(url, json=payload)
+        res.raise_for_status()
         return res.json()
-    else:
+    except requests.exceptions.HTTPError:
         error = res.json().get("error", {}).get("message", "Unknown error")
         st.error(f"Sign up failed: {error}")
-        return None
+    except Exception as e:
+        st.error(f"Unexpected error during signup: {e}")
+    return None
 
 def login_user(email, password):
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
-    payload = {"email": email, "password": password, "returnSecureToken": True}
-    res = requests.post(url, json=payload)
-    if res.status_code == 200:
+    try:
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+        payload = {"email": email, "password": password, "returnSecureToken": True}
+        res = requests.post(url, json=payload)
+        res.raise_for_status()
         return res.json()
-    else:
+    except requests.exceptions.HTTPError:
         error = res.json().get("error", {}).get("message", "Unknown error")
         st.error(f"Login failed: {error}")
-        return None
+    except Exception as e:
+        st.error(f"Unexpected error during login: {e}")
+    return None
 
 # ----------------------
 # Firestore Functions
 # ----------------------
 def save_journal(uid, text):
-    db.collection("journals").add({
-        "uid": uid,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
+    try:
+        db.collection("journals").add({
+            "uid": uid,
+            "text": text,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+    except Exception as e:
+        st.error(f"Failed to save journal: {e}")
 
 def get_journals(uid):
-    docs = db.collection("journals").where("uid", "==", uid).stream()
     journals = []
-    for d in docs:
-        data = d.to_dict()
-        ts = data.get("timestamp")
-        if ts is not None:
-            try:
-                formatted_ts = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
+    try:
+        docs = db.collection("journals").where("uid", "==", uid).stream()
+        for d in docs:
+            data = d.to_dict()
+            ts = data.get("timestamp")
+            if isinstance(ts, datetime):
+                formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S")
+            else:
                 formatted_ts = str(ts)
-        else:
-            formatted_ts = "Unknown"
-        journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
-    journals.sort(key=lambda x: x["timestamp"], reverse=True)
+            journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
+        journals.sort(key=lambda x: x["timestamp"], reverse=True)
+    except Exception as e:
+        st.error(f"Failed to fetch journals: {e}")
     return journals
 
 def save_chat(uid, role, text):
-    db.collection("chats").add({
-        "uid": uid,
-        "role": role,
-        "text": text,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
+    try:
+        db.collection("chats").add({
+            "uid": uid,
+            "role": role,
+            "text": text,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+    except Exception as e:
+        st.error(f"Failed to save chat: {e}")
 
 def get_chats(uid):
-    docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
     chats = []
-    for d in docs:
-        data = d.to_dict()
-        chats.append({"role": data.get("role", ""), "text": data.get("text", "")})
+    try:
+        docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
+        for d in docs:
+            data = d.to_dict()
+            chats.append({"role": data.get("role", ""), "text": data.get("text", "")})
+    except Exception as e:
+        st.error(f"Failed to fetch chats: {e}")
     return chats
 
 # ----------------------
@@ -149,12 +157,14 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except openai.error.OpenAIError as e:
-        if hasattr(e, "http_status") and e.http_status == 429:
+    except openai.APIError as e:
+        if e.http_status == 429:
             return "AI is temporarily unavailable due to quota limits. Please try again later."
         return f"AI failed to respond: {e}"
+    except openai.AuthenticationError as e:
+        return f"Authentication error: Check your OpenAI API key. {e}"
     except Exception as e:
-        return f"Unexpected error: {e}"
+        return f"Unexpected error: {type(e).__name__} - {e}"
 
 # ----------------------
 # Authentication UI
@@ -201,9 +211,10 @@ if st.session_state.user:
 
     # --- Chat ---
     st.subheader("🤖 AI Mentor Chat")
-    user_msg = st.text_input("Say something to your AI mentor:")
-    if st.button("Send"):
-        if user_msg.strip():
+    with st.form("chat_form", clear_on_submit=True):
+        user_msg = st.text_input("Say something to your AI mentor:")
+        submitted = st.form_submit_button("Send")
+        if submitted and user_msg.strip():
             save_chat(uid, "user", user_msg)
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
