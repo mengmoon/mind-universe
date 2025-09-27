@@ -180,12 +180,25 @@ def generate_ai_reply(user_input, chat_history):
             )
         return response.choices[0].message.content.strip()
     except openai.APIError as e:
-        return f"OpenAI API Error: {e}"
+        error_message = str(e)
+        
+        # 1. Check for Quota Error (429 - insufficient_quota)
+        if "insufficient_quota" in error_message or "exceeded your current quota" in error_message:
+            return "Quota Error: Your OpenAI API key has run out of credits. Please update your billing details on the OpenAI platform to continue using the AI mentor."
+        
+        # 2. Check for Authentication Errors (401)
+        if "Invalid API key" in error_message or "Unauthorized" in error_message:
+            return "Authentication Error: Please check your OpenAI API key in Streamlit secrets."
+            
+        # 3. Check for general Rate Limit (429)
+        if "Rate limit" in error_message:
+            return "AI is temporarily unavailable due to high usage. Please try again in a moment."
+            
+        # 4. Default for other API errors
+        return f"OpenAI API Error: {error_message}"
+        
     except Exception as e:
-        msg = str(e)
-        if "Rate limit" in msg:
-            return "AI is temporarily unavailable due to quota limits. Please try again later."
-        return f"AI failed: {msg}"
+        return f"AI failed due to an unexpected non-API error: {str(e)}"
 
 # ----------------------
 # Authentication UI
