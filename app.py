@@ -38,6 +38,10 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 if "journals" not in st.session_state:
     st.session_state.journals = []
+# State for the delete confirmation logic
+if "confirm_delete" not in st.session_state:
+    st.session_state.confirm_delete = False
+
 
 # ----------------------
 # Firebase Initialization
@@ -93,7 +97,7 @@ def authenticate_user(email, password, mode):
         return None, f"Network/Request error: {e}"
 
 # ----------------------
-# Firestore Functions (No changes needed here)
+# Firestore Functions 
 # ----------------------
 def fetch_journals(uid):
     """Fetches all journal entries for the user."""
@@ -157,6 +161,64 @@ def save_chat(uid, role, text):
         })
     except Exception as e:
         st.error(f"Error saving chat message: {e}")
+
+def delete_user_data(uid):
+    """Deletes all chat and journal history for the user."""
+    
+    # 1. Delete Journals
+    journal_docs = db.collection("journals").where("uid", "==", uid).stream()
+    for doc in journal_docs:
+        doc.reference.delete()
+        
+    # 2. Delete Chats
+    chat_docs = db.collection("chats").where("uid", "==", uid).stream()
+    for doc in chat_docs:
+        doc.reference.delete()
+        
+    # 3. Clear session state
+    st.session_state.chat_messages = []
+    st.session_state.journals = []
+    st.session_state.confirm_delete = False # Reset confirmation state
+    
+    st.toast("All history cleared successfully!", icon="🗑️")
+
+# ----------------------
+# History Export Function
+# ----------------------
+def export_history(journals, chats):
+    """Formats chat and journal data into a downloadable string."""
+    export_content = "--- Mind Universe Data Export ---\n\n"
+    export_content += f"User: {st.session_state.user['email'] if st.session_state.user else 'Guest'}\n"
+    export_content += f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    export_content += "--------------------------------------\n\n"
+
+    # Journals Section
+    export_content += "=====================\n"
+    export_content += "   JOURNAL ENTRIES\n"
+    export_content += "=====================\n\n"
+    
+    if not journals:
+        export_content += "No journal entries found.\n\n"
+    
+    for entry in journals:
+        export_content += f"--- Entry Timestamp: {entry['timestamp']} ---\n"
+        export_content += f"{entry['text']}\n\n"
+    
+    # Chats Section
+    export_content += "\n=====================\n"
+    export_content += "    CHAT HISTORY\n"
+    export_content += "=====================\n\n"
+
+    if not chats:
+        export_content += "No chat history found.\n\n"
+
+    for msg in chats:
+        role_label = "USER" if msg['role'] == 'user' else "AI MENTOR"
+        export_content += f"[{role_label}]: {msg['content']}\n"
+    
+    export_content += "\n--- END OF EXPORT ---\n"
+    return export_content
+
 
 # ----------------------
 # Gemini API Functions (UPDATED FIX)
@@ -316,6 +378,41 @@ else:
         st.success("Logged out")
         st.rerun()
 
+    # --- Sidebar Data Management Actions ---
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("Data Management")
+
+        # 1. Export Button
+        export_data = export_history(st.session_state.journals, st.session_state.chat_messages)
+        st.download_button(
+            label="⬇️ Download History (TXT)",
+            data=export_data,
+            file_name=f"Mind_Universe_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain",
+            key="export_button",
+            help="Download all your journal and chat data as a single text file. (Recommended before clearing!)"
+        )
+        
+        # 2. Delete Confirmation Logic
+        if st.button("🗑️ Clear All History", key="initial_delete_button", type="primary"):
+            # Set state to show confirmation buttons
+            st.session_state.confirm_delete = True
+        
+        if st.session_state.confirm_delete:
+            st.warning("ARE YOU SURE? This action is permanent.")
+            
+            col_yes, col_no = st.columns(2)
+            
+            with col_yes:
+                if st.button("YES, Delete Everything", key="confirm_delete_yes", type="secondary"):
+                    delete_user_data(uid)
+                    st.rerun()
+            
+            with col_no:
+                if st.button("Cancel", key="confirm_delete_no"):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
     # --- Main Tabs ---
     tab_journal, tab_chat = st.tabs(["📝 Journaling", "🤖 AI Mentor"])
 
