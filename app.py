@@ -147,9 +147,9 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
+    except openai.RateLimitError as e:
+        return "AI is temporarily unavailable due to quota limits. Please try again later."
     except openai.APIError as e:
-        if e.http_status == 429:
-            return "AI is temporarily unavailable due to quota limits. Please try again later."
         return f"AI failed to respond: {e}"
     except openai.AuthenticationError as e:
         return f"Authentication error: Please check your OpenAI API key. Error: {e}"
