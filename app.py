@@ -11,7 +11,7 @@ import openai
 # ----------------------
 st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
 st.title("🌌 Mind Universe")
-st.subtitle("Explore your inner world with AI mentors.")
+st.subheader("Explore your inner world with AI mentors.")
 
 # ----------------------
 # Session State
