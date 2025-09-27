@@ -5,7 +5,6 @@ import requests
 import json
 from datetime import datetime
 import openai
-import os
 
 # ----------------------
 # Page Config
@@ -19,26 +18,35 @@ st.write("Explore your inner world with AI mentors.")
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
+if "rerender" not in st.session_state:
+    st.session_state.rerender = False
+
+def safe_rerun():
+    st.session_state.rerender = True
 
 # ----------------------
 # Firebase Initialization
 # ----------------------
 try:
-    firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])  # Parse JSON string to dict
-except Exception as e:
-    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
-    st.stop()
+    firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
+except KeyError as e:
+    st.error(f"Missing secret key: {e}")
+    raise
+except json.JSONDecodeError as e:
+    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
+    raise
 
 if not firebase_admin._apps:
     try:
-        # Fix PEM newlines
-        firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+        # Fix PEM formatting: replace literal "\n" with actual newline
+        if "private_key" in firebase_config:
+            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("Firebase Admin SDK Initialized Successfully")
-    except Exception as e:
-        st.error(f"Firebase initialization failed: {e}")
-        st.stop()
+        st.success("Firebase Admin SDK Initialized")
+    except ValueError as e:
+        st.error(f"Failed to initialize Firebase: {e}")
+        raise
 
 db = firestore.client()
 
@@ -85,10 +93,10 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        if ts:
+        if ts is not None:
             try:
-                formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S")
-            except:
+                formatted_ts = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
                 formatted_ts = str(ts)
         else:
             formatted_ts = "Unknown"
@@ -105,7 +113,7 @@ def save_chat(uid, role, text):
     })
 
 def get_chats(uid):
-    docs = db.collection("chats").where("uid", "==", uid).stream()
+    docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
     chats = []
     for d in docs:
         data = d.to_dict()
@@ -141,12 +149,12 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except openai.error.RateLimitError:
-        return "AI is temporarily unavailable due to quota limits. Please try later."
-    except openai.error.InvalidRequestError as e:
-        return f"Invalid request to AI: {e}"
-    except Exception as e:
+    except openai.error.OpenAIError as e:
+        if hasattr(e, "http_status") and e.http_status == 429:
+            return "AI is temporarily unavailable due to quota limits. Please try again later."
         return f"AI failed to respond: {e}"
+    except Exception as e:
+        return f"Unexpected error: {e}"
 
 # ----------------------
 # Authentication UI
@@ -158,6 +166,7 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
+        st.success("Logged out")
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
