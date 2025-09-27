@@ -18,37 +18,37 @@ st.write("Explore your inner world with AI mentors.")
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
-if "reload_flag" not in st.session_state:
-    st.session_state.reload_flag = False
+if "rerender_flag" not in st.session_state:
+    st.session_state.rerender_flag = False
 
+# ----------------------
+# Safe rerender
+# ----------------------
 def safe_rerun():
-    st.session_state.reload_flag = not st.session_state.reload_flag
+    st.session_state.rerender_flag = not st.session_state.rerender_flag
 
 # ----------------------
 # Firebase Initialization
 # ----------------------
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except KeyError:
-    st.error("Missing FIREBASE_CONFIG in secrets.toml")
-    st.stop()
-except json.JSONDecodeError:
-    st.error("FIREBASE_CONFIG is not valid JSON")
+except Exception as e:
+    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
     st.stop()
 
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.write("✅ Firebase Admin Initialized")
-    except ValueError as e:
-        st.error(f"Firebase initialization failed: {e}")
+        st.write("✅ Firebase Admin SDK Initialized")
+    except Exception as e:
+        st.error(f"Failed to initialize Firebase Admin SDK: {e}")
         st.stop()
 
 db = firestore.client()
 
 # ----------------------
-# Firebase Auth
+# Firebase Auth via REST API
 # ----------------------
 try:
     FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
@@ -62,10 +62,9 @@ def signup_user(email, password):
     res = requests.post(url, json=payload)
     if res.status_code == 200:
         return res.json()
-    else:
-        error = res.json().get("error", {}).get("message", "Unknown error")
-        st.error(f"Sign up failed: {error}")
-        return None
+    error = res.json().get("error", {}).get("message", "Unknown error")
+    st.error(f"Sign up failed: {error}")
+    return None
 
 def login_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
@@ -73,10 +72,9 @@ def login_user(email, password):
     res = requests.post(url, json=payload)
     if res.status_code == 200:
         return res.json()
-    else:
-        error = res.json().get("error", {}).get("message", "Unknown error")
-        st.error(f"Login failed: {error}")
-        return None
+    error = res.json().get("error", {}).get("message", "Unknown error")
+    st.error(f"Login failed: {error}")
+    return None
 
 # ----------------------
 # Firestore Functions
@@ -94,12 +92,8 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        # Convert Firestore timestamp to datetime safely
-        if ts is not None:
-            try:
-                formatted_ts = ts.to_datetime().strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                formatted_ts = str(ts)
+        if ts:
+            formatted_ts = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S")  # safer timestamp conversion
         else:
             formatted_ts = "Unknown"
         journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
@@ -155,13 +149,19 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except openai.error.OpenAIError as e:
-        status = getattr(e, "http_status", None)
-        if status == 429:
-            return "AI is temporarily unavailable due to quota limits. Please try again later."
-        return f"AI failed to respond: {e}"
+    
+    except openai.error.RateLimitError:
+        return "AI is temporarily unavailable due to rate limits. Please try again shortly."
+    except openai.error.APIError as e:
+        return f"OpenAI API error: {e}"
+    except openai.error.APIConnectionError as e:
+        return f"Failed to connect to OpenAI: {e}"
+    except openai.error.InvalidRequestError as e:
+        return f"Invalid request to OpenAI: {e}"
+    except openai.error.AuthenticationError as e:
+        return f"OpenAI Authentication Error: {e}"
     except Exception as e:
-        return f"Unexpected error: {e}"
+        return f"Unexpected AI error: {e}"
 
 # ----------------------
 # Authentication UI
@@ -173,7 +173,6 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
-        st.success("Logged out")
         safe_rerun()
 else:
     email = st.text_input("Email")
