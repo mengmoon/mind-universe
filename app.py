@@ -159,7 +159,7 @@ def save_chat(uid, role, text):
         st.error(f"Error saving chat message: {e}")
 
 # ----------------------
-# Gemini API Functions (UPDATED)
+# Gemini API Functions (UPDATED FIX)
 # ----------------------
 def generate_ai_reply(user_input, chat_history):
     """Generates an AI response using the Gemini REST API."""
@@ -197,7 +197,8 @@ def generate_ai_reply(user_input, chat_history):
 
     payload = {
         "contents": messages,
-        "config": {
+        # *** FIX APPLIED HERE: Changed 'config' to 'generationConfig' ***
+        "generationConfig": {
             "temperature": 0.7,
             "maxOutputTokens": 500
         }
