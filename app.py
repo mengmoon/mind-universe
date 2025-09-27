@@ -18,40 +18,40 @@ st.write("Explore your inner world with AI mentors.")
 # ----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
-if "refresh_trigger" not in st.session_state:
-    st.session_state.refresh_trigger = False
 
 def safe_rerun():
-    st.session_state.refresh_trigger = not st.session_state.refresh_trigger
+    st.rerun()
 
 # ----------------------
 # Firebase Initialization
 # ----------------------
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except Exception as e:
-    st.error(f"Failed to load FIREBASE_CONFIG: {e}")
-    st.stop()
+except KeyError as e:
+    st.error(f"Missing secret key: {e}")
+    raise
+except json.JSONDecodeError as e:
+    st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
+    raise
 
 if not firebase_admin._apps:
     try:
+        # Fix PEM formatting: replace literal "\n" with actual newline
+        if "private_key" in firebase_config:
+            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        st.success("Firebase initialized successfully")
-    except Exception as e:
-        st.error(f"Failed to initialize Firebase Admin SDK: {e}")
-        st.stop()
+        st.success("Firebase Admin SDK Initialized")
+    except ValueError as e:
+        st.error(f"Failed to initialize Firebase: {e}")
+        raise
 
 db = firestore.client()
 
 # ----------------------
-# Firebase Auth REST API
+# Firebase Auth via REST API
 # ----------------------
-try:
-    FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
-except KeyError:
-    st.error("FIREBASE_API_KEY missing in secrets.toml")
-    st.stop()
+FIREBASE_API_KEY = st.secrets["FIREBASE_API_KEY"]
 
 def signup_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
@@ -91,11 +91,10 @@ def get_journals(uid):
     for d in docs:
         data = d.to_dict()
         ts = data.get("timestamp")
-        if ts:
+        if ts is not None:
             try:
-                formatted_ts = ts.ToDatetime().strftime("%Y-%m-%d %H:%M:%S")
-            except AttributeError:
-                # fallback for Firestore timestamp object
+                formatted_ts = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
                 formatted_ts = str(ts)
         else:
             formatted_ts = "Unknown"
@@ -122,22 +121,18 @@ def get_chats(uid):
 # ----------------------
 # OpenAI GPT Setup
 # ----------------------
-try:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-except KeyError:
-    st.error("OPENAI_API_KEY missing in secrets.toml")
-    st.stop()
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 AI_SYSTEM_PROMPT = """
-You are an AI mentor who can switch between six voices:
+You are an AI mentor who can switch between these six voices:
 - Freud: psychoanalysis, explore subconscious
-- Adler: encouragement, individual psychology
+- Adler: individual psychology, encouragement
 - Jung: archetypes, shadow work
 - Maslow: self-actualization guidance
-- Positive Psychology: strengths and well-being
-- CBT: cognitive-behavioral therapy
+- Positive Psychology: focus on strengths and well-being
+- CBT: cognitive-behavioral therapy, practical advice
 
-Provide empathetic, insightful, reflective responses.
+Always provide empathetic, insightful, and reflective responses.
 """
 
 def generate_ai_reply(user_input):
@@ -152,12 +147,14 @@ def generate_ai_reply(user_input):
             max_tokens=500
         )
         return response.choices[0].message.content.strip()
-    except openai.error.RateLimitError:
-        return "OpenAI rate limit exceeded. Please wait and try again."
-    except openai.error.OpenAIError as e:
-        return f"OpenAI error: {e}"
+    except openai.APIError as e:
+        if e.http_status == 429:
+            return "AI is temporarily unavailable due to quota limits. Please try again later."
+        return f"AI failed to respond: {e}"
+    except openai.AuthenticationError as e:
+        return f"Authentication error: Please check your OpenAI API key. Error: {e}"
     except Exception as e:
-        return f"Unexpected error: {e}"
+        return f"Unexpected error: {type(e).__name__} - {e}"
 
 # ----------------------
 # Authentication UI
@@ -169,15 +166,18 @@ if st.session_state.user:
     st.write(f"Logged in as: {st.session_state.user['email']}")
     if st.button("Logout"):
         st.session_state.user = None
-        safe_rerun()
+        st.success("Logged out")
 else:
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
     if st.button("Submit"):
-        user = signup_user(email, password) if auth_mode == "Sign Up" else login_user(email, password)
+        if auth_mode == "Sign Up":
+            user = signup_user(email, password)
+        else:
+            user = login_user(email, password)
         if user:
             st.session_state.user = user
-            safe_rerun()
+            st.success(f"Logged in as {email}")
 
 # ----------------------
 # Main App Features
@@ -192,7 +192,6 @@ if st.session_state.user:
         if journal_text.strip():
             save_journal(uid, journal_text)
             st.success("Journal saved")
-            safe_rerun()
         else:
             st.warning("Write something before saving.")
 
@@ -209,7 +208,6 @@ if st.session_state.user:
             ai_reply = generate_ai_reply(user_msg)
             save_chat(uid, "ai", ai_reply)
             st.success(f"AI: {ai_reply}")
-            safe_rerun()
 
     st.subheader("💬 Chat History")
     for msg in get_chats(uid):
