@@ -4,7 +4,7 @@ from firebase_admin import credentials, firestore
 import requests
 import json
 from datetime import datetime
-import openai
+import time # Import for exponential backoff
 
 # ----------------------
 # Page Config
@@ -27,6 +27,9 @@ You are an AI mentor who can switch between these six voices:
 
 Always provide empathetic, insightful, and reflective responses.
 """
+# Configuration for the Gemini API
+GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # Initialize session state for user and chat messages
 if "user" not in st.session_state:
@@ -39,6 +42,7 @@ if "journals" not in st.session_state:
 # ----------------------
 # Firebase Initialization
 # ----------------------
+# NOTE: The Firebase setup remains the same as it uses the service account key.
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
 except KeyError as e:
@@ -55,7 +59,6 @@ if not firebase_admin._apps:
             firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        # st.success("Firebase Admin SDK Initialized") # Commented out for cleaner UI
     except ValueError as e:
         st.error(f"Failed to initialize Firebase: {e}")
         st.stop()
@@ -64,7 +67,7 @@ db = firestore.client()
 FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
 
 # ----------------------
-# Firebase Auth via REST API
+# Firebase Auth via REST API (No changes needed here)
 # ----------------------
 @st.cache_resource
 def get_auth_url(endpoint):
@@ -90,7 +93,7 @@ def authenticate_user(email, password, mode):
         return None, f"Network/Request error: {e}"
 
 # ----------------------
-# Firestore Functions
+# Firestore Functions (No changes needed here)
 # ----------------------
 def fetch_journals(uid):
     """Fetches all journal entries for the user."""
@@ -131,17 +134,24 @@ def fetch_chats(uid):
         chats = []
         for d in docs:
             data = d.to_dict()
-            chats.append({"role": data.get("role", ""), "content": data.get("text", "")})
+            # The Gemini API uses 'model' for the AI role, let's normalize to 'ai' for session state
+            role = data.get("role", "")
+            if role == 'model':
+                role = 'ai'
+            chats.append({"role": role, "content": data.get("text", "")})
         st.session_state.chat_messages = chats
     except Exception as e:
         st.error(f"Error fetching chats: {e}")
 
 def save_chat(uid, role, text):
-    """Saves a single chat message."""
+    """Saves a single chat message. We use 'model' for the AI role when saving to match Gemini API naming."""
+    # When saving AI messages, we use 'model' to align with the Gemini response structure,
+    # but we display it as 'ai' in the frontend.
+    save_role = 'model' if role == 'ai' else role 
     try:
         db.collection("chats").add({
             "uid": uid,
-            "role": role,
+            "role": save_role,
             "text": text,
             "timestamp": firestore.SERVER_TIMESTAMP
         })
@@ -149,59 +159,116 @@ def save_chat(uid, role, text):
         st.error(f"Error saving chat message: {e}")
 
 # ----------------------
-# OpenAI GPT Functions
+# Gemini API Functions (UPDATED)
 # ----------------------
 def generate_ai_reply(user_input, chat_history):
-    """Generates an AI response using the current chat context."""
-    if not st.secrets.get("OPENAI_API_KEY"):
-        return "OpenAI API key is missing. Please set it in your Streamlit secrets."
-        
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
+    """Generates an AI response using the Gemini REST API."""
     
-    # Construct message list for context, including the system prompt
-    messages = [{"role": "system", "content": AI_SYSTEM_PROMPT}]
-    # Add history, mapping our session state to the API format
+    # Check for the key provided by the user in Streamlit secrets
+    api_key = st.secrets.get("GEMINI_API_KEY")
+    if not api_key:
+        return "Gemini API key is missing. Please set 'GEMINI_API_KEY' in your Streamlit secrets."
+    
+    # Construct the API URL
+    url = f"{GEMINI_BASE_URL}/{GEMINI_MODEL}:generateContent?key={api_key}"
+    
+    # Construct message list for context
+    messages = []
+    
+    # 1. Add System Instruction
+    messages.append({
+        "role": "user", 
+        "parts": [{"text": AI_SYSTEM_PROMPT}] # System instructions are usually added to the first user turn's parts
+    })
+    
+    # 2. Add History
     for msg in chat_history:
-        # Skip the latest user message which is already included in `user_input` flow
+        # The Gemini API expects roles to be 'user' and 'model'
+        role = 'model' if msg['role'] == 'ai' else msg['role']
+        
+        # We only need the history up to the current user input
         if msg['role'] == 'user' and msg['content'] == user_input:
             continue
-        messages.append({"role": msg['role'], "content": msg['content']})
+            
+        messages.append({"role": role, "parts": [{"text": msg['content']}]})
 
-    # Add the current user input
-    messages.append({"role": "user", "content": user_input})
+    # 3. Add the current user input
+    messages.append({"role": "user", "parts": [{"text": user_input}]})
+
+    payload = {
+        "contents": messages,
+        "config": {
+            "temperature": 0.7,
+            "maxOutputTokens": 500
+        }
+    }
     
-    try:
-        with st.spinner("🧠 AI Mentor is reflecting..."):
-            response = openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1,
-            )
-        return response.choices[0].message.content.strip()
-    except openai.APIError as e:
-        error_message = str(e)
-        
-        # 1. Check for Quota Error (429 - insufficient_quota)
-        if "insufficient_quota" in error_message or "exceeded your current quota" in error_message:
-            return "Quota Error: Your OpenAI API key has run out of credits. Please update your billing details on the OpenAI platform to continue using the AI mentor."
-        
-        # 2. Check for Authentication Errors (401)
-        if "Invalid API key" in error_message or "Unauthorized" in error_message:
-            return "Authentication Error: Please check your OpenAI API key in Streamlit secrets."
+    headers = {'Content-Type': 'application/json'}
+    
+    # Use exponential backoff for transient errors
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            with st.spinner(f"🧠 AI Mentor is reflecting... (Attempt {attempt + 1})"):
+                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+                
+                result = response.json()
+                
+                # Extract text from the response
+                candidate = result.get('candidates', [{}])[0]
+                text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
+                
+                if text:
+                    return text
+                else:
+                    # Handle cases where API returns status 200 but content is empty or blocked
+                    safety_ratings = candidate.get('safetyRatings', 'N/A')
+                    st.error(f"Gemini API returned no text. Safety Check: {safety_ratings}")
+                    return "The AI mentor's response was filtered due to safety settings or was empty."
+
+        except requests.exceptions.HTTPError as e:
+            error_code = response.status_code
+            error_data = {}
+            try:
+                error_data = response.json()
+            except json.JSONDecodeError:
+                pass
             
-        # 3. Check for general Rate Limit (429)
-        if "Rate limit" in error_message:
-            return "AI is temporarily unavailable due to high usage. Please try again in a moment."
+            error_message = error_data.get('error', {}).get('message', str(e))
             
-        # 4. Default for other API errors
-        return f"OpenAI API Error: {error_message}"
+            # Check for API-specific errors (e.g., rate limits, invalid key)
+            if error_code == 400:
+                if "API key not valid" in error_message or "API_KEY_INVALID" in error_message:
+                    return "Authentication Error: Please check your 'GEMINI_API_KEY' in Streamlit secrets. It appears to be invalid."
+                return f"Bad Request Error (400): {error_message}"
+            
+            elif error_code == 429:
+                # Rate limit error
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    time.sleep(wait_time)
+                    continue # Retry
+                return "Rate Limit Exceeded: AI is temporarily unavailable due to high usage. Please try again in a moment."
+            
+            # For other 4xx/5xx errors
+            return f"Gemini API Error {error_code}: {error_message}"
+            
+        except requests.exceptions.RequestException as e:
+            # Handle general request errors (network issues, DNS failure, etc.)
+            return f"Network Error: Could not connect to Gemini API. Check your internet connection or URL. Details: {str(e)}"
         
-    except Exception as e:
-        return f"AI failed due to an unexpected non-API error: {str(e)}"
+        except Exception as e:
+            # Catch other unexpected errors
+            return f"An unexpected error occurred while generating the AI response: {str(e)}"
+
+    # If all retries fail
+    return "AI generation failed after multiple retries due to rate limiting or transient errors."
+
 
 # ----------------------
-# Authentication UI
+# Authentication UI (No changes needed here)
 # ----------------------
 def authentication_ui():
     """Displays the login/signup form."""
@@ -231,7 +298,7 @@ def authentication_ui():
                 st.rerun() # Use rerun only here to force UI refresh post-login
 
 # ----------------------
-# Main Application Flow
+# Main Application Flow (Minor adjustments for new role name)
 # ----------------------
 
 if st.session_state.user is None:
@@ -285,7 +352,7 @@ else:
                 fetch_chats(uid) 
 
             for message in st.session_state.chat_messages:
-                # Use 'assistant' for the AI role
+                # Use 'assistant' for the AI role, which is mapped from 'ai'
                 with st.chat_message(message["role"] if message["role"] == "user" else "assistant"):
                     st.write(message["content"])
 
@@ -297,12 +364,15 @@ else:
             save_chat(uid, "user", user_input)
 
             # 2. Get AI reply
+            # We pass the full history for context
             ai_reply = generate_ai_reply(user_input, st.session_state.chat_messages)
             
             # 3. Append AI message to state and save to Firestore
             if ai_reply:
+                # Use 'ai' role for session state/display
                 st.session_state.chat_messages.append({"role": "ai", "content": ai_reply})
-                save_chat(uid, "ai", ai_reply)
+                # Use 'ai' role for saving (it's mapped to 'model' inside save_chat)
+                save_chat(uid, "ai", ai_reply) 
             
             # Rerun to update the chat history with the new messages
             st.rerun()
