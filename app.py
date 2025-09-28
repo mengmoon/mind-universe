@@ -1,710 +1,576 @@
+# --- Mind Universe: A Digital Space for Mental Wellness and Self-Exploration ---
+# Uses Streamlit for the UI, Firebase for secure data persistence, and
+# Google Gemini API for AI chat (text and text-to-speech).
+
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
 import requests
 import json
+import pandas as pd
 from datetime import datetime
-import time # Import for exponential backoff
-import io # NEW: For handling audio data in memory
-import base64 # NEW: For decoding audio data
-import re # NEW: For extracting sample rate from mimeType
+import io
+import base64
+import re
 
-# ----------------------
-# Page Config
-# ----------------------
-st.set_page_config(page_title="Mind Universe", page_icon="🧠", layout="wide")
-st.title("🌌 Mind Universe")
-st.subheader("Explore your inner world with AI mentors.")
+# --- 1. Global Configuration and Secrets Loading ---
+# Load secrets configuration from environment variables (Streamlit secrets)
+# These variables are automatically injected by the environment.
 
-# ----------------------
-# Constants and Initial State
-# ----------------------
-AI_SYSTEM_PROMPT = """
-You are an AI mentor who can switch between these six voices:
-- Freud: psychoanalysis, explore subconscious
-- Adler: individual psychology, encouragement
-- Jung: archetypes, shadow work
-- Maslow: self-actualization guidance
-- Positive Psychology: focus on strengths and well-being
-- CBT: cognitive-behavioral therapy, practical advice
-
-Always provide empathetic, insightful, and reflective responses.
-"""
-# Configuration for the Gemini API
-GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-
-# TTS Configuration
-TTS_MODEL = "gemini-2.5-flash-preview-tts"
-TTS_VOICE = "Kore" # A clear, firm voice, suitable for CBT
-
-# Initialize session state for user and chat messages
-if "user" not in st.session_state:
-    st.session_state.user = None
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-if "journals" not in st.session_state:
-    st.session_state.journals = []
-# State for the delete confirmation logic
-if "confirm_delete" not in st.session_state:
-    st.session_state.confirm_delete = False
-# State to temporarily hold the latest generated audio for playback
-if "latest_wav_bytes" not in st.session_state:
-    st.session_state.latest_wav_bytes = None
-
-
-# ----------------------
-# Firebase Initialization
-# ----------------------
+# Load Firebase Config
 try:
-    # Load the entire Firebase config from Streamlit secrets
-    firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
-except KeyError as e:
-    st.error(f"Missing secret key: {e}. Please ensure FIREBASE_CONFIG is set in your Streamlit secrets.")
-    st.stop()
-except json.JSONDecodeError as e:
+    # Attempt to load the Firebase config JSON from the environment variable.
+    # It must be read as a string and parsed.
+    firebase_config_str = st.secrets["FIREBASE_CONFIG"]
+
+    # CRITICAL FIX for Private Key:
+    # The private key often contains escaped newlines (\\n). We need to un-escape them 
+    # to be single newlines (\n) before the Python Firebase SDK can use the certificate.
+    # We also defensively strip surrounding quotes and whitespace.
+    if isinstance(firebase_config_str, str):
+        # 1. Replace doubly escaped newlines with singly escaped newlines
+        firebase_config_str = firebase_config_str.replace('\\\\n', '\\n')
+        # 2. Strip leading/trailing whitespace/quotes just in case of bad paste
+        firebase_config_str = firebase_config_str.strip().strip('"').strip("'")
+        
+    firebaseConfig = json.loads(firebase_config_str)
+    
+except Exception as e:
     st.error(f"Failed to parse FIREBASE_CONFIG as JSON: {e}")
     st.stop()
 
-if not firebase_admin._apps:
+# Load Gemini API Key
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    st.error("GEMINI_API_KEY not found in Streamlit secrets. Please configure it to use the AI Mentor.")
+    st.stop()
+
+# --- 2. Firebase Initialization and Authentication ---
+
+# Use st.cache_resource for resources that should be initialized once
+@st.cache_resource
+def initialize_firebase(config):
+    """Initializes and returns the Firebase app, auth, and firestore objects."""
+    import firebase_admin
+    from firebase_admin import credentials, firestore, auth
+
+    # To use service account credentials, we must convert the config dict
+    # into a ServiceAccount credential object.
     try:
-        # --- ENHANCED FIX FOR "Invalid private key" ERROR ---
-        if "private_key" in firebase_config:
-            # 1. Aggressive newline replacement and stripping whitespace
-            key = firebase_config["private_key"].replace("\\n", "\n").strip()
-            
-            # 2. Check and remove surrounding quotes, which often happen when copy/pasting
-            if key.startswith('"') and key.endswith('"'):
-                key = key[1:-1]
-                
-            firebase_config["private_key"] = key
-            
-            # Diagnostic Log: Print the start of the processed key to help diagnose the input format
-            # This appears in the Streamlit console logs, not the UI.
-            print(f"DEBUG: Processed Private Key Starts With: {firebase_config['private_key'][:50]}...")
-            
-        cred = credentials.Certificate(firebase_config)
-        firebase_admin.initialize_app(cred)
-    except ValueError as e:
+        # NOTE: The private_key must contain actual '\n' characters, which is handled
+        # in the loading block above.
+        
+        # We need to construct a dictionary containing the service account info
+        # from the larger firebaseConfig object.
+        service_account_info = {
+            "type": config["type"],
+            "project_id": config["project_id"],
+            "private_key_id": config["private_key_id"],
+            "private_key": config["private_key"],
+            "client_email": config["client_email"],
+            "client_id": config["client_id"],
+            "auth_uri": config["auth_uri"],
+            "token_uri": config["token_uri"],
+            "auth_provider_x509_cert_url": config["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": config["client_x509_cert_url"],
+            "universe_domain": config["universe_domain"],
+        }
+        
+        # Check if the app is already initialized
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(service_account_info)
+            firebase_admin.initialize_app(cred)
+        
+        db = firestore.client()
+        
+        # Note: We cannot return the auth object directly from the initialized app 
+        # because the Firebase Admin SDK does not expose the client-side Auth methods
+        # that allow anonymous sign-in via st.experimental_user.email/uid.
+        # We rely on st.experimental_user for basic authentication details, 
+        # or we would need to implement a full client-side sign-in flow.
+        return db
+
+    except Exception as e:
+        # This catches errors like "Invalid private key"
         st.error(f"Failed to initialize Firebase: {e}")
         st.stop()
-    except Exception as e:
-        st.error(f"An unknown error occurred during Firebase initialization: {e}")
-        st.stop()
-
-
-db = firestore.client()
-FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
-
-# ----------------------
-# Firebase Auth via REST API
-# ----------------------
-@st.cache_resource
-def get_auth_url(endpoint):
-    return f"https://identitytoolkit.googleapis.com/v1/accounts:{endpoint}?key={FIREBASE_API_KEY}"
-
-def authenticate_user(email, password, mode):
-    """Handles both sign up and login."""
-    endpoint = "signUp" if mode == "Sign Up" else "signInWithPassword"
-    url = get_auth_url(endpoint)
-    payload = {"email": email, "password": password, "returnSecureToken": True}
-    
-    try:
-        res = requests.post(url, json=payload)
-        res.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-        return res.json(), None
-    except requests.exceptions.HTTPError as e:
-        try:
-            error = res.json().get("error", {}).get("message", "Unknown error")
-        except json.JSONDecodeError:
-            error = f"Server returned status code {res.status_code}"
-        return None, error
-    except Exception as e:
-        return None, f"Network/Request error: {e}"
-
-# ----------------------
-# Firestore Functions 
-# ----------------------
-def fetch_journals(uid):
-    """Fetches all journal entries for the user."""
-    try:
-        docs = db.collection("journals").where("uid", "==", uid).order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-        journals = []
-        for d in docs:
-            data = d.to_dict()
-            ts = data.get("timestamp")
-            if ts:
-                # Firestore Timestamp to string format
-                formatted_ts = ts.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                formatted_ts = "Unknown"
-            journals.append({"text": data.get("text", ""), "timestamp": formatted_ts})
-        st.session_state.journals = journals
-    except Exception as e:
-        st.error(f"Error fetching journals: {e}")
-
-def save_journal(uid, text):
-    """Saves a new journal entry."""
-    try:
-        db.collection("journals").add({
-            "uid": uid,
-            "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP
-        })
-        st.toast("Journal saved successfully!", icon="✅")
-        # Re-fetch journals to update the history instantly (without full rerun)
-        fetch_journals(uid)
-    except Exception as e:
-        st.error(f"Error saving journal: {e}")
-
-def fetch_chats(uid):
-    """Fetches all chat history for the user and loads it into session state."""
-    try:
-        docs = db.collection("chats").where("uid", "==", uid).order_by("timestamp").stream()
-        chats = []
-        for d in docs:
-            data = d.to_dict()
-            # The Gemini API uses 'model' for the AI role, let's normalize to 'ai' for session state
-            role = data.get("role", "")
-            if role == 'model':
-                role = 'ai'
-            chats.append({"role": role, "content": data.get("text", "")})
-        st.session_state.chat_messages = chats
-    except Exception as e:
-        st.error(f"Error fetching chats: {e}")
-
-def save_chat(uid, role, text):
-    """Saves a single chat message. We use 'model' for the AI role when saving to match Gemini API naming."""
-    # When saving AI messages, we use 'model' to align with the Gemini response structure,
-    # but we display it as 'ai' in the frontend.
-    save_role = 'model' if role == 'ai' else role 
-    try:
-        db.collection("chats").add({
-            "uid": uid,
-            "role": save_role,
-            "text": text,
-            "timestamp": firestore.SERVER_TIMESTAMP
-        })
-    except Exception as e:
-        st.error(f"Error saving chat message: {e}")
-
-def delete_user_data(uid):
-    """Deletes all chat and journal history for the user."""
-    
-    # 1. Delete Journals
-    journal_docs = db.collection("journals").where("uid", "==", uid).stream()
-    for doc in journal_docs:
-        doc.reference.delete()
         
-    # 2. Delete Chats
-    chat_docs = db.collection("chats").where("uid", "==", uid).stream()
-    for doc in chat_docs:
-        doc.reference.delete()
+db = initialize_firebase(firebaseConfig)
+
+# Get current user ID (using Streamlit's experimental user feature for simplicity)
+if 'user_id' not in st.session_state:
+    # Use Streamlit user's email if available, otherwise a default anonymous ID
+    st.session_state.user_id = st.experimental_user.id if st.experimental_user.id else "anonymous_user"
+    st.session_state.user_email = st.experimental_user.email if st.experimental_user.email else "Anonymous"
+
+# --- 3. Firestore Data Path Configuration ---
+
+# Use the user_id to define the secure, user-specific data path
+def get_user_chat_collection_ref(user_id):
+    """Returns the Firestore reference for the user's chat history."""
+    # Private data path: /artifacts/{appId}/users/{userId}/chat_history
+    app_id = firebaseConfig["project_id"]
+    return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('chat_history')
+
+def get_user_journal_collection_ref(user_id):
+    """Returns the Firestore reference for the user's journal entries."""
+    # Private data path: /artifacts/{appId}/users/{userId}/journal_entries
+    app_id = firebaseConfig["project_id"]
+    return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('journal_entries')
+
+# --- 4. State Management and Data Loading ---
+
+# Initialize chat and journal states
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'journal_entries' not in st.session_state:
+    st.session_state.journal_entries = []
+if 'latest_wav_bytes' not in st.session_state:
+    st.session_state.latest_wav_bytes = None
+
+# Placeholder function to load data from Firestore (run once)
+@st.cache_data(show_spinner="Loading data from the Universe...")
+def load_data_from_firestore(user_id):
+    """Loads all chat and journal data for the user."""
+    
+    # Load Chat History
+    try:
+        chat_ref = get_user_chat_collection_ref(user_id)
+        chat_docs = chat_ref.stream()
+        chat_data = [doc.to_dict() for doc in chat_docs]
+        # Sort chat data by timestamp for correct display order
+        chat_data.sort(key=lambda x: x.get('timestamp', 0))
         
-    # 3. Clear session state
-    st.session_state.chat_messages = []
-    st.session_state.journals = []
-    st.session_state.confirm_delete = False # Reset confirmation state
-    
-    st.toast("All history cleared successfully!", icon="🗑️")
+        # Load Journal Entries
+        journal_ref = get_user_journal_collection_ref(user_id)
+        journal_docs = journal_ref.stream()
+        journal_data = [doc.to_dict() for doc in journal_docs]
+        # Sort journal entries by date
+        journal_data.sort(key=lambda x: datetime.strptime(x.get('date', '1970-01-01'), '%Y-%m-%d'), reverse=True)
 
-# ----------------------
-# History Export Function
-# ----------------------
-def export_history(journals, chats):
-    """Formats chat and journal data into a downloadable string."""
-    export_content = "--- Mind Universe Data Export ---\n\n"
-    export_content += f"User: {st.session_state.user['email'] if st.session_state.user else 'Guest'}\n"
-    export_content += f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    export_content += "--------------------------------------\n\n"
+        return chat_data, journal_data
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return [], []
 
-    # Journals Section
-    export_content += "=====================\n"
-    export_content += "   JOURNAL ENTRIES\n"
-    export_content += "=====================\n\n"
-    
-    if not journals:
-        export_content += "No journal entries found.\n\n"
-    
-    for entry in journals:
-        export_content += f"--- Entry Timestamp: {entry['timestamp']} ---\n"
-        export_content += f"{entry['text']}\n\n"
-    
-    # Chats Section
-    export_content += "\n=====================\n"
-    export_content += "    CHAT HISTORY\n"
-    export_content += "=====================\n\n"
+# Load data on app startup
+chat_data, journal_data = load_data_from_firestore(st.session_state.user_id)
+st.session_state.chat_history = chat_data
+st.session_state.journal_entries = journal_data
 
-    if not chats:
-        export_content += "No chat history found.\n\n"
+# --- 5. Firebase Write Functions ---
 
-    for msg in chats:
-        role_label = "USER" if msg['role'] == 'user' else "AI MENTOR"
-        export_content += f"[{role_label}]: {msg['content']}\n"
-    
-    export_content += "\n--- END OF EXPORT ---\n"
-    return export_content
+def save_chat_message(role, content):
+    """Saves a single chat message to Firestore and updates session state."""
+    timestamp = datetime.now().timestamp()
+    message = {
+        "role": role,
+        "content": content,
+        "timestamp": timestamp
+    }
+    try:
+        chat_ref = get_user_chat_collection_ref(st.session_state.user_id)
+        chat_ref.add(message)
+        st.session_state.chat_history.append(message)
+        # Clear the cache so new data is loaded on refresh/re-run
+        load_data_from_firestore.clear()
+    except Exception as e:
+        st.error(f"Failed to save message: {e}")
 
-# ----------------------
-# Audio Utility Functions (For TTS)
-# ----------------------
-
-def pcm_to_wav(pcm_data, sample_rate, num_channels=1, bytes_per_sample=2):
-    """
-    Converts raw PCM 16-bit signed integer data (L16) into a WAV file format (bytes).
-    This is necessary for the Streamlit audio player.
-    """
-    wav_file = io.BytesIO()
-    
-    # RIFF chunk descriptor
-    wav_file.write(b'RIFF')
-    
-    # Chunk size (4 + (8 + subchunk1_size) + (8 + subchunk2_size))
-    data_size = len(pcm_data)
-    subchunk1_size = 16
-    subchunk2_size = data_size
-    chunk_size = 36 + subchunk2_size
-    wav_file.write(chunk_size.to_bytes(4, byteorder='little'))
-    wav_file.write(b'WAVE')
-    
-    # fmt sub-chunk
-    wav_file.write(b'fmt ')
-    wav_file.write(subchunk1_size.to_bytes(4, byteorder='little')) # Subchunk1 size (16 for PCM)
-    wav_file.write(b'\x01\x00') # Audio format (1 for PCM)
-    wav_file.write(num_channels.to_bytes(2, byteorder='little'))
-    wav_file.write(sample_rate.to_bytes(4, byteorder='little'))
-    
-    byte_rate = sample_rate * num_channels * bytes_per_sample
-    wav_file.write(byte_rate.to_bytes(4, byteorder='little'))
-    
-    block_align = num_channels * bytes_per_sample
-    wav_file.write(block_align.to_bytes(2, byteorder='little'))
-    wav_file.write((bytes_per_sample * 8).to_bytes(2, byteorder='little')) # Bits per sample (16)
-    
-    # data sub-chunk
-    wav_file.write(b'data')
-    wav_file.write(data_size.to_bytes(4, byteorder='little'))
-    
-    # Write the actual PCM data
-    wav_file.write(pcm_data)
-    
-    return wav_file.getvalue()
-
-# ----------------------
-# Gemini API Functions 
-# ----------------------
-def generate_ai_reply(user_input, chat_history):
-    """Generates an AI response using the standard Gemini REST API."""
-    
-    # Check for the key provided by the user in Streamlit secrets
-    api_key = st.secrets.get("GEMINI_API_KEY")
-    if not api_key:
-        return "Gemini API key is missing. Please set 'GEMINI_API_KEY' in your Streamlit secrets."
-    
-    # Construct the API URL
-    url = f"{GEMINI_BASE_URL}/{GEMINI_MODEL}:generateContent?key={api_key}"
-    
-    # Construct message list for context
-    messages = []
-    
-    # 1. Add System Instruction
-    messages.append({
-        "role": "user", 
-        "parts": [{"text": AI_SYSTEM_PROMPT}] # System instructions are usually added to the first user turn's parts
-    })
-    
-    # 2. Add History
-    for msg in chat_history:
-        # The Gemini API expects roles to be 'user' and 'model'
-        role = 'model' if msg['role'] == 'ai' else msg['role']
+def save_journal_entry(date, title, content):
+    """Saves a journal entry to Firestore and updates session state."""
+    entry = {
+        "date": date,
+        "title": title,
+        "content": content,
+        "timestamp": datetime.now().timestamp()
+    }
+    try:
+        journal_ref = get_user_journal_collection_ref(st.session_state.user_id)
+        journal_ref.add(entry)
         
-        # We only need the history up to the current user input
-        if msg['role'] == 'user' and msg['content'] == user_input:
-            continue
-            
-        messages.append({"role": role, "parts": [{"text": msg['content']}]})
+        # Force reload journal data to reflect change and maintain sort order
+        _, st.session_state.journal_entries = load_data_from_firestore(st.session_state.user_id)
+        # Clear the cache so new data is loaded on refresh/re-run
+        load_data_from_firestore.clear()
+    except Exception as e:
+        st.error(f"Failed to save journal entry: {e}")
 
-    # 3. Add the current user input
-    messages.append({"role": "user", "parts": [{"text": user_input}]})
+# --- 6. LLM API Call Functions (Gemini) ---
 
+GEMINI_TEXT_MODEL = "gemini-2.5-flash"
+GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
+GEMINI_TTS_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+def generate_ai_reply(user_prompt):
+    """Calls the Gemini API for text generation."""
+    
+    # Construct chat history for context
+    chat_contents = [
+        {"role": "user" if msg["role"] == "user" else "model", 
+         "parts": [{"text": msg["content"]}]}
+        for msg in st.session_state.chat_history
+    ]
+    chat_contents.append({"role": "user", "parts": [{"text": user_prompt}]})
+
+    # Define the system prompt for the AI Mentor persona
+    system_prompt = (
+        "You are 'Mind Mentor', a compassionate, insightful AI focused on mental wellness. "
+        "Your tone is gentle, encouraging, and non-judgmental. Offer supportive reflections, "
+        "evidence-based coping strategies, and practical exercises. "
+        "Keep your responses concise, aiming for under 500 tokens to ensure a full reply."
+    )
+    
     payload = {
-        "contents": messages,
+        "contents": chat_contents,
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 500
+            "maxOutputTokens": 500,
+            "temperature": 0.8
         }
     }
-    
-    headers = {'Content-Type': 'application/json'}
-    
-    # Use exponential backoff for transient errors
-    max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            with st.spinner(f"🧠 AI Mentor is reflecting... (Attempt {attempt + 1})"):
-                response = requests.post(url, headers=headers, data=json.dumps(payload))
-                response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-                
-                result = response.json()
-                
-                # Extract the primary candidate object
-                candidate = result.get('candidates', [{}])[0]
-                text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
-                
-                if text:
-                    return text
-                else:
-                    # Handle cases where API returns status 200 but content is empty or blocked
-                    finish_reason = candidate.get('finishReason', 'UNKNOWN')
-                    
-                    if finish_reason == 'SAFETY':
-                        safety_info = candidate.get('safetyRatings', 'N/A')
-                        st.error(f"⚠️ Content Blocked: The AI response was filtered due to safety settings. Finish Reason: {finish_reason}. Safety Details: {safety_info}")
-                        return "The AI mentor's response was filtered due to safety settings. Please rephrase your query to ensure it aligns with content guidelines."
-                    
-                    elif finish_reason == 'MAX_TOKENS':
-                        st.error(f"⚠️ Response Too Long: The AI response was cut off because it reached the maximum token limit (500). Finish Reason: {finish_reason}.")
-                        return "The AI mentor's response was too long. Please try a more specific question."
-                        
-                    else:
-                        st.error(f"Gemini API returned no text. Finish Reason: {finish_reason}. Raw Candidate: {candidate}")
-                        return "The AI mentor's response was empty or incomplete."
 
-
-        except requests.exceptions.HTTPError as e:
-            error_code = response.status_code
-            error_data = {}
-            try:
-                error_data = response.json()
-            except json.JSONDecodeError:
-                pass
-            
-            error_message = error_data.get('error', {}).get('message', str(e))
-            
-            # Check for API-specific errors (e.g., rate limits, invalid key)
-            if error_code == 400:
-                if "API key not valid" in error_message or "API_KEY_INVALID" in error_message:
-                    return "Authentication Error: Please check your 'GEMINI_API_KEY' in Streamlit secrets. It appears to be invalid."
-                return f"Bad Request Error (400): {error_message}"
-            
-            elif error_code == 429:
-                # Rate limit error
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    time.sleep(wait_time)
-                    continue # Retry
-                return "Rate Limit Exceeded: AI is temporarily unavailable due to high usage. Please try again in a moment."
-            
-            # For other 4xx/5xx errors
-            return f"Gemini API Error {error_code}: {error_message}"
-            
-        except requests.exceptions.RequestException as e:
-            # Handle general request errors (network issues, DNS failure, etc.)
-            return f"Network Error: Could not connect to Gemini API. Check your internet connection or URL. Details: {str(e)}"
+    try:
+        response = requests.post(
+            GEMINI_API_URL, 
+            headers={'Content-Type': 'application/json'}, 
+            data=json.dumps(payload)
+        )
+        response.raise_for_status()
+        result = response.json()
         
-        except Exception as e:
-            # Catch other unexpected errors
-            return f"An unexpected error occurred while generating the AI response: {str(e)}"
-
-    # If all retries fail
-    return "AI generation failed after multiple retries due to rate limiting or transient errors."
-
-def generate_tts_reply(user_input, chat_history):
-    """Generates an AI response using Gemini TTS and returns (text, WAV bytes)."""
-    api_key = st.secrets.get("GEMINI_API_KEY")
-    if not api_key:
-        return None, "Gemini API key is missing. Please set 'GEMINI_API_KEY' in your Streamlit secrets."
-    
-    url = f"{GEMINI_BASE_URL}/{TTS_MODEL}:generateContent?key={api_key}"
-    
-    # We explicitly tell the AI to use CBT voice and keep the response concise.
-    system_instruction = "You are an AI mentor specializing in CBT (cognitive-behavioral therapy). Provide a concise, practical, and encouraging response to the user's latest message, strictly using the CBT voice."
-    
-    # Prepare chat history for context
-    contents = []
-    # Add history for context, using 'model' for AI role
-    # Note: Using [-6:] to keep context manageable for the TTS endpoint
-    for msg in chat_history[-6:]: 
-        role = 'model' if msg['role'] == 'ai' else msg['role']
-        contents.append({"role": role, "parts": [{"text": msg['content']}]})
+        candidate = result.get('candidates', [{}])[0]
         
-    # Add the current user input
-    contents.append({"role": "user", "parts": [{"text": user_input}]})
+        # Check for safety filtering or length limits
+        finish_reason = candidate.get('finishReason')
+        if finish_reason == "SAFETY":
+            st.error("The AI mentor's response was filtered due to safety settings. Please rephrase your query.")
+            return None
+        elif finish_reason == "MAX_TOKENS":
+            st.error("The AI mentor's response was too long. Please try a more specific question.")
+            return None
+        
+        # Extract the content
+        text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
+        
+        if not text:
+            # Check if any content was returned but failed the finish reason check
+            st.error(f"The AI mentor's response was empty or filtered. Finish Reason: {finish_reason}")
+            return None
+            
+        return text
 
+    except requests.exceptions.RequestException as e:
+        st.error(f"API Request Failed: {e}")
+        return None
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return None
+
+def pcm_to_wav(pcm_data, sample_rate=24000, channels=1, bits_per_sample=16):
+    """Converts raw signed 16-bit PCM audio data to WAV format."""
+    
+    # 1. WAV Header (44 bytes)
+    wav_header = io.BytesIO()
+
+    # RIFF chunk descriptor
+    wav_header.write(b'RIFF')  # Chunk ID
+    data_size = len(pcm_data)
+    chunk_size = 36 + data_size
+    wav_header.write(chunk_size.to_bytes(4, 'little'))  # Chunk Size
+    wav_header.write(b'WAVE')  # Format
+
+    # fmt sub-chunk
+    wav_header.write(b'fmt ')  # Sub-chunk 1 ID
+    wav_header.write((16).to_bytes(4, 'little'))  # Sub-chunk 1 Size (16 for PCM)
+    wav_header.write((1).to_bytes(2, 'little'))  # Audio Format (1 for PCM)
+    wav_header.write(channels.to_bytes(2, 'little'))  # Num Channels
+    wav_header.write(sample_rate.to_bytes(4, 'little'))  # Sample Rate
+    
+    byte_rate = sample_rate * channels * (bits_per_sample // 8)
+    wav_header.write(byte_rate.to_bytes(4, 'little'))  # Byte Rate
+    
+    block_align = channels * (bits_per_sample // 8)
+    wav_header.write(block_align.to_bytes(2, 'little'))  # Block Align
+    wav_header.write(bits_per_sample.to_bytes(2, 'little'))  # Bits Per Sample
+
+    # data sub-chunk
+    wav_header.write(b'data')  # Sub-chunk 2 ID
+    wav_header.write(data_size.to_bytes(4, 'little'))  # Sub-chunk 2 Size
+
+    # 2. Combine Header and Data
+    wav_bytes = wav_header.getvalue() + pcm_data
+
+    return wav_bytes
+
+def generate_tts_reply(user_prompt):
+    """Calls the Gemini API for TTS generation with a CBT persona."""
+
+    # Define the system prompt for the CBT voice mentor
+    system_prompt = (
+        "You are 'CBT Voice Mentor', an expert in Cognitive Behavioral Therapy. "
+        "Your responses must be highly concise, strictly focused on CBT techniques, "
+        "and delivered with a calm, supportive voice. "
+        "Do not use filler phrases. Use the 'Kore' voice for your response."
+    )
+    
+    # We don't send history for TTS to keep the context short and the response focused.
     payload = {
-        "contents": contents,
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 150 # Keep text short for quicker, focused voice response
+            "responseModalities": ["AUDIO"]
         },
+        # TTS configuration is a top-level property for this model
         "speechConfig": {
             "voiceConfig": {
-                "prebuiltVoiceConfig": { "voiceName": TTS_VOICE }
-            },
-            "systemInstruction": {
-                "parts": [{"text": system_instruction}]
+                "prebuiltVoiceConfig": { 
+                    "voiceName": "Kore" # Firm, supportive voice
+                }
             }
         }
     }
-    
-    headers = {'Content-Type': 'application/json'}
-    max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            with st.spinner(f"🎤 Generating CBT Voice Reply... (Attempt {attempt + 1})"):
-                response = requests.post(url, headers=headers, data=json.dumps(payload))
-                response.raise_for_status() 
-                
-                result = response.json()
-                candidate = result.get('candidates', [{}])[0]
-                
-                # TTS response has both text and inlineData (audio)
-                content_parts = candidate.get('content', {}).get('parts', [{}])
-                
-                # Find text and audio parts
-                text_part_content = next((p.get('text') for p in content_parts if p.get('text')), None)
-                audio_part = next((p for p in content_parts if p.get('inlineData')), None)
-                
-                if text_part_content and audio_part and audio_part.get('inlineData'):
-                    
-                    audio_data_base64 = audio_part['inlineData']['data']
-                    mime_type = audio_part['inlineData']['mimeType'] # e.g., audio/L16;rate=24000
-                    
-                    # Extract sample rate from mimeType
-                    match = re.search(r'rate=(\d+)', mime_type)
-                    sample_rate = int(match.group(1)) if match else 24000 
-                    
-                    # Decode base64 to raw PCM bytes
-                    pcm_data = base64.b64decode(audio_data_base64)
-                    
-                    # Convert raw PCM to WAV format
-                    wav_bytes = pcm_to_wav(pcm_data, sample_rate)
-                    
-                    # Return the AI-generated text and the playable WAV bytes
-                    return text_part_content, wav_bytes
-                
-                else:
-                    finish_reason = candidate.get('finishReason', 'UNKNOWN')
-                    error_message = f"TTS API returned incomplete data. Finish Reason: {finish_reason}. Candidate: {candidate}"
-                    return None, error_message
 
-        except requests.exceptions.HTTPError as e:
-            error_code = response.status_code
-            error_data = response.json() if response.content else {}
-            error_message = error_data.get('error', {}).get('message', str(e))
-            
-            if error_code == 429 and attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-                continue 
-            
-            return None, f"TTS API Error {error_code}: {error_message}"
-            
-        except Exception as e:
-            return None, f"An unexpected error occurred during TTS: {str(e)}"
-
-    return None, "TTS generation failed after multiple retries."
-
-
-# ----------------------
-# Authentication UI
-# ----------------------
-def authentication_ui():
-    """Displays the login/signup form."""
-    st.subheader("🔐 Login / Sign Up")
-    auth_mode = st.radio("Select Action:", ["Login", "Sign Up"], key="auth_mode_radio")
-
-    with st.form("auth_form"):
-        email = st.text_input("Email", key="auth_email")
-        password = st.text_input("Password", type="password", key="auth_password")
-        submitted = st.form_submit_button(auth_mode)
-        
-        if submitted:
-            if not email or not password:
-                st.error("Please enter both email and password.")
-                return
-
-            user, error = authenticate_user(email, password, auth_mode)
-
-            if error:
-                st.error(f"{auth_mode} failed: {error}")
-            elif user:
-                st.session_state.user = user
-                st.success(f"Successfully logged in as {email}")
-                # Fetch data immediately after successful login
-                fetch_journals(user["localId"])
-                fetch_chats(user["localId"])
-                st.rerun() # Use rerun only here to force UI refresh post-login
-
-# ----------------------
-# Main Application Flow
-# ----------------------
-
-if st.session_state.user is None:
-    authentication_ui()
-else:
-    # User is logged in
-    uid = st.session_state.user["localId"]
-    st.sidebar.markdown(f"**Logged in as:** {st.session_state.user['email']}")
-    
-    if st.sidebar.button("Logout"):
-        st.session_state.user = None
-        st.session_state.chat_messages = []
-        st.session_state.journals = []
-        st.success("Logged out")
-        st.rerun()
-
-    # --- Sidebar Data Management Actions ---
-    with st.sidebar:
-        st.markdown("---")
-        st.subheader("Data Management")
-
-        # 1. Export Button
-        export_data = export_history(st.session_state.journals, st.session_state.chat_messages)
-        st.download_button(
-            label="⬇️ Download History (TXT)",
-            data=export_data,
-            file_name=f"Mind_Universe_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
-            key="export_button",
-            help="Download all your journal and chat data as a single text file. (Recommended before clearing!)"
+    try:
+        response = requests.post(
+            GEMINI_TTS_API_URL, 
+            headers={'Content-Type': 'application/json'}, 
+            data=json.dumps(payload)
         )
+        response.raise_for_status()
+        result = response.json()
         
-        # 2. Delete Confirmation Logic
-        if st.button("🗑️ Clear All History", key="initial_delete_button", type="primary"):
-            # Set state to show confirmation buttons
-            st.session_state.confirm_delete = True
+        candidate = result.get('candidates', [{}])[0]
         
-        if st.session_state.confirm_delete:
-            st.warning("ARE YOU SURE? This action is permanent.")
-            
-            col_yes, col_no = st.columns(2)
-            
-            with col_yes:
-                if st.button("YES, Delete Everything", key="confirm_delete_yes", type="secondary"):
-                    delete_user_data(uid)
-                    st.rerun()
-            
-            with col_no:
-                if st.button("Cancel", key="confirm_delete_no"):
-                    st.session_state.confirm_delete = False
-                    st.rerun()
-    # --- Main Tabs ---
-    tab_journal, tab_chat, tab_voice = st.tabs(["📝 Journaling", "🤖 AI Mentor", "🎤 Voice CBT"])
-
-    with tab_journal:
-        st.subheader("Write Your Daily Reflections")
-        journal_text = st.text_area("What's on your mind today?", key="current_journal_text", height=150)
+        # 1. Extract the text response (what the AI actually said)
+        text_part = candidate.get('content', {}).get('parts', [])[0]
+        tts_text = text_part.get('text', "")
         
-        # Use a form to prevent input reset on button press
-        with st.form("journal_form", clear_on_submit=True):
-            save_button = st.form_submit_button("Save Journal Entry")
-            if save_button and journal_text.strip():
-                save_journal(uid, journal_text)
-            elif save_button:
-                st.warning("Please write something before saving.")
-
-        st.subheader("Journal History")
-        if not st.session_state.journals:
-            st.info("No journal entries yet. Start writing!")
-            # Re-fetch in case state was cleared but data exists
-            fetch_journals(uid) 
-            
-        for entry in st.session_state.journals:
-            with st.expander(f"**{entry['timestamp']}**"):
-                st.write(entry['text'])
-
-    with tab_chat:
-        st.subheader("Converse with Your AI Mentor")
-
-        # Display Chat History
-        chat_placeholder = st.container()
-        with chat_placeholder:
-            if not st.session_state.chat_messages:
-                st.info("Start a conversation with your AI mentor! Try asking them to adopt a specific voice, like 'Speak to me as Freud.'")
-                # Re-fetch in case state was cleared but data exists
-                fetch_chats(uid) 
-
-            for message in st.session_state.chat_messages:
-                # Use 'assistant' for the AI role, which is mapped from 'ai'
-                with st.chat_message(message["role"] if message["role"] == "user" else "assistant"):
-                    st.write(message["content"])
-
-        # Input for new message
-        if user_input := st.chat_input("Ask your AI mentor...", key="text_chat_input"):
-            
-            # 1. Append user message to state and save to Firestore
-            st.session_state.chat_messages.append({"role": "user", "content": user_input})
-            save_chat(uid, "user", user_input)
-
-            # 2. Get AI reply
-            # We pass the full history for context
-            ai_reply = generate_ai_reply(user_input, st.session_state.chat_messages)
-            
-            # 3. Append AI message to state and save to Firestore
-            if ai_reply:
-                # Use 'ai' role for session state/display
-                st.session_state.chat_messages.append({"role": "ai", "content": ai_reply})
-                # Use 'ai' role for saving (it's mapped to 'model' inside save_chat)
-                save_chat(uid, "ai", ai_reply) 
-            
-            # Rerun to update the chat history with the new messages
-            st.rerun()
-
-    with tab_voice:
-        st.subheader("Cognitive Behavioral Therapy (CBT) Voice Chat")
-        st.info(f"Converse with the CBT mentor, who will reply using the **{TTS_VOICE}** voice. The AI will provide practical, concise responses to keep the audio short.")
+        # 2. Extract the audio data
+        audio_part = candidate.get('content', {}).get('parts', [])[-1]
+        mime_type = audio_part.get('inlineData', {}).get('mimeType', "")
+        audio_data_base64 = audio_part.get('inlineData', {}).get('data', "")
         
-        # Display Voice Chat History (uses the same chat_messages state)
-        voice_chat_placeholder = st.container()
-        with voice_chat_placeholder:
-            if not st.session_state.chat_messages:
-                st.info("Start talking about a distressing thought or situation to receive a CBT-based, voiced response.")
+        if not tts_text or not audio_data_base64 or not mime_type.startswith("audio/L16"):
+            st.error(f"Could not generate voice response. Details: Model returned insufficient data.")
+            return None, None
+            
+        # 3. Get sample rate from mimeType (e.g., audio/L16;rate=24000)
+        sample_rate_match = re.search(r'rate=(\d+)', mime_type)
+        sample_rate = int(sample_rate_match.group(1)) if sample_rate_match else 24000
 
-            for message in st.session_state.chat_messages:
-                with st.chat_message(message["role"] if message["role"] == "user" else "assistant"):
-                    st.write(message["content"])
-                    
-            # Placeholder for the audio player
-            # We only play the latest generated audio that was stored in state
-            if 'latest_wav_bytes' in st.session_state and st.session_state.latest_wav_bytes:
-                st.audio(st.session_state.latest_wav_bytes, format='audio/wav', autoplay=True)
-                # Clear audio bytes immediately so it doesn't replay on every refresh
-                st.session_state.latest_wav_bytes = None 
+        # 4. Decode base64 to raw PCM bytes
+        pcm_data = base64.b64decode(audio_data_base64)
 
+        # 5. Convert PCM bytes to WAV format
+        wav_bytes = pcm_to_wav(pcm_data, sample_rate=sample_rate)
+            
+        return tts_text, wav_bytes
 
-        # Input for new voice message
-        voice_user_input = st.chat_input("Speak your mind for a CBT response...", key="voice_chat_input")
+    except requests.exceptions.RequestException as e:
+        st.error(f"ERROR: Could not generate voice response. Details: TTS API Error {response.status_code}: {response.text}")
+        return None, None
+    except Exception as e:
+        st.error(f"ERROR: An unexpected error occurred during TTS processing: {e}")
+        return None, None
+
+# --- 7. UI Components ---
+
+st.set_page_config(layout="wide", page_title="Mind Universe: Wellness & AI")
+
+# --- Header ---
+st.title("🌌 Mind Universe")
+st.caption(f"Welcome, {st.session_state.user_email} (ID: {st.session_state.user_id})")
+
+# --- Sidebar (Data Management) ---
+with st.sidebar:
+    st.header("Data Management")
+    st.caption("Securely store and manage your data with Firebase.")
+    
+    # --- Download/Export ---
+    
+    def generate_export_content():
+        """Formats all chat and journal data into a comprehensive text file."""
+        export_text = f"--- Mind Universe Data Export for User ID: {st.session_state.user_id} ---\n"
+        export_text += f"Export Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         
-        if voice_user_input:
+        # 1. Journal Entries
+        export_text += "============== JOURNAL ENTRIES ==============\n"
+        if st.session_state.journal_entries:
+            for entry in st.session_state.journal_entries:
+                export_text += f"Date: {entry.get('date', 'N/A')}\n"
+                export_text += f"Title: {entry.get('title', 'No Title')}\n"
+                export_text += f"Content:\n{entry.get('content', 'No content')}\n"
+                export_text += "-" * 20 + "\n"
+        else:
+            export_text += "No journal entries found.\n\n"
             
-            # 1. Append user message to state and save to Firestore
-            st.session_state.chat_messages.append({"role": "user", "content": voice_user_input})
-            save_chat(uid, "user", voice_user_input)
+        # 2. Chat History
+        export_text += "\n============== CHAT HISTORY ==============\n"
+        if st.session_state.chat_history:
+            # Sort chat history by timestamp for chronological order
+            sorted_chat = sorted(st.session_state.chat_history, key=lambda x: x.get('timestamp', 0))
+            for message in sorted_chat:
+                dt_object = datetime.fromtimestamp(message.get('timestamp', 0))
+                time_str = dt_object.strftime('%Y-%m-%d %H:%M:%S')
+                role = message.get('role', 'unknown').upper()
+                content = message.get('content', '')
+                export_text += f"[{time_str}] {role}: {content}\n"
+        else:
+            export_text += "No chat messages found.\n"
+            
+        return export_text.encode('utf-8')
 
-            # 2. Get AI reply (Text and Audio)
-            ai_text_reply, error_or_wav_bytes = generate_tts_reply(voice_user_input, st.session_state.chat_messages)
-            
-            # 3. Handle response
-            if ai_text_reply and isinstance(error_or_wav_bytes, bytes):
-                wav_bytes = error_or_wav_bytes
+    st.download_button(
+        label="Download History (TXT)",
+        data=generate_export_content(),
+        file_name=f"mind_universe_export_{datetime.now().strftime('%Y%m%d')}.txt",
+        mime="text/plain",
+        help="Downloads all journal entries and chat history into a single text file."
+    )
+    
+    # --- Clear History ---
+    st.subheader("⚠️ Clear History")
+    
+    if st.button("Clear All History", type="secondary", help="Permanently deletes all chat and journal data."):
+        st.session_state.confirm_delete = True
+        
+    if st.session_state.get('confirm_delete', False):
+        st.warning("Are you sure you want to PERMANENTLY delete ALL data?")
+        col_yes, col_no = st.columns(2)
+        
+        with col_yes:
+            if st.button("Yes, Delete All Data"):
+                with st.spinner("Deleting data..."):
+                    try:
+                        # Delete Chat History
+                        chat_ref = get_user_chat_collection_ref(st.session_state.user_id)
+                        for doc in chat_ref.stream():
+                            doc.reference.delete()
+                        st.session_state.chat_history = []
+                        
+                        # Delete Journal Entries
+                        journal_ref = get_user_journal_collection_ref(st.session_state.user_id)
+                        for doc in journal_ref.stream():
+                            doc.reference.delete()
+                        st.session_state.journal_entries = []
+                        
+                        # Clear the cache
+                        load_data_from_firestore.clear()
+                        
+                        st.success("All history has been permanently deleted.")
+                        st.session_state.confirm_delete = False
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Deletion failed: {e}")
+                        st.session_state.confirm_delete = False
+
+        with col_no:
+            if st.button("No, Cancel"):
+                st.session_state.confirm_delete = False
+                st.info("Deletion cancelled.")
+                st.rerun()
+
+# --- 8. Tabbed Application Interface ---
+
+tab_journal, tab_mentor, tab_voice = st.tabs(["✍️ Wellness Journal", "💬 AI Mentor", "🎤 Voice CBT"])
+
+# --- Tab 1: Wellness Journal ---
+with tab_journal:
+    st.header("Reflect & Record")
+    st.caption("Your private space for logging thoughts, feelings, and progress.")
+
+    # Entry Form
+    with st.form("journal_form", clear_on_submit=True):
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            entry_date = st.date_input("Date", datetime.today())
+        with col2:
+            entry_title = st.text_input("Title (Optional)", placeholder="A brief summary of your entry")
+        
+        entry_content = st.text_area("What's on your mind today?", height=200, placeholder="Write freely about your day, challenges, or gratitude.")
+        
+        submitted = st.form_submit_button("Save Entry", type="primary")
+        
+        if submitted and entry_content:
+            save_journal_entry(entry_date.strftime('%Y-%m-%d'), entry_title, entry_content)
+            st.success("Journal entry saved!")
+        elif submitted and not entry_content:
+            st.warning("Please write some content before saving.")
+
+    st.divider()
+
+    # Display History
+    st.subheader("Journal History")
+    if st.session_state.journal_entries:
+        # Journal entries are loaded reverse chronologically
+        for entry in st.session_state.journal_entries:
+            with st.expander(f"**{entry.get('date')}** — {entry.get('title', 'Untitled Entry')}"):
+                st.markdown(entry.get('content'))
+                # NOTE: Deletion of individual entries is omitted for brevity but would require a Firestore delete call.
+    else:
+        st.info("No journal entries found. Start writing above!")
+
+# --- Tab 2: AI Mentor (Text Chat) ---
+with tab_mentor:
+    st.header("Ask Your Mentor")
+    st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
+
+    # Display chat history
+    for message in st.session_state.chat_history:
+        role = "user" if message["role"] == "user" else "assistant"
+        avatar = "👤" if role == "user" else "🧠"
+        with st.chat_message(role, avatar=avatar):
+            st.markdown(message["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask your Mind Mentor a question..."):
+        # Display user message and save
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
+        save_chat_message("user", prompt)
+
+        # Generate AI response
+        with st.chat_message("assistant", avatar="🧠"):
+            with st.spinner("Mind Mentor is reflecting..."):
+                ai_response = generate_ai_reply(prompt)
                 
-                # Store text
-                st.session_state.chat_messages.append({"role": "ai", "content": ai_text_reply})
-                save_chat(uid, "ai", ai_text_reply) 
+            if ai_response:
+                st.markdown(ai_response)
+                save_chat_message("model", ai_response)
+                # Force rerun to update the chat history display immediately
+                st.rerun()
+
+# --- Tab 3: Voice CBT ---
+with tab_voice:
+    st.header("CBT Voice Assistant")
+    st.caption("Receive concise, verbal advice using Cognitive Behavioral Therapy principles.")
+    
+    # Display the last generated audio (if any)
+    if st.session_state.latest_wav_bytes:
+        st.audio(st.session_state.latest_wav_bytes, format='audio/wav')
+        
+    # Input for voice prompt
+    voice_prompt = st.text_input(
+        "Ask a CBT question", 
+        placeholder="How can I reframe a negative thought about my work performance?",
+        key="voice_input"
+    )
+    
+    if st.button("Get Voice Advice", type="primary"):
+        if voice_prompt:
+            with st.spinner("Generating voice response..."):
+                tts_text, wav_bytes = generate_tts_reply(voice_prompt)
                 
-                # Store audio bytes in session state for instant playback after rerun
+            if wav_bytes:
                 st.session_state.latest_wav_bytes = wav_bytes
-
+                
+                st.subheader("CBT Mentor Said:")
+                st.markdown(f"*{tts_text}*")
+                
+                # We use st.rerun to display the st.audio component cleanly
+                st.rerun()
             else:
-                # Handle error case
-                st.error(f"Error generating voice response: {error_or_wav_bytes}")
-                # Append error message to history to show user
-                st.session_state.chat_messages.append({"role": "ai", "content": f"ERROR: Could not generate voice response. Details: {error_or_wav_bytes}"})
-                save_chat(uid, "ai", f"ERROR: Could not generate voice response. Details: {error_or_wav_bytes}")
-
-
-            # Rerun to update the chat history and trigger audio playback
-            st.rerun()
+                st.warning("Could not generate voice audio. Check console for API errors.")
+        else:
+            st.warning("Please enter a question for the CBT Voice Assistant.")
