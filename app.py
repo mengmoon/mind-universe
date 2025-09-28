@@ -312,15 +312,13 @@ def generate_tts_reply(user_prompt):
     Calls the Gemini API for TTS generation with exponential backoff for retries.
     """
     
-    # --- SIMPLIFIED SYSTEM PROMPT TO REDUCE SERVER LOAD/FAILURES ---
+    # --- SIMPLIFIED SYSTEM PROMPT ---
     system_prompt = (
         "You are a concise CBT guide. Give short, practical, and calm advice in one or two sentences."
     )
     
-    # --- VOICE CONFIGURATION ---
-    # Current voice is Kore. If you experience 500 errors, try changing this.
-    # Alternatives: 'Puck' (Upbeat), 'Charon' (Informative), 'Zephyr' (Bright)
-    TTS_VOICE_NAME = "Kore"
+    # --- VOICE CONFIGURATION (Changed from Kore to Puck) ---
+    TTS_VOICE_NAME = "Puck" 
 
     payload = {
         "contents": [{"parts": [{"text": user_prompt}]}],
@@ -383,7 +381,7 @@ def generate_tts_reply(user_prompt):
             # Check for recoverable errors (500, 503)
             if response.status_code in [500, 503] and attempt < max_retries - 1:
                 wait_time = 2 ** (attempt + 1)
-                # Note: We keep the warning for transparency but proceed with sleep
+                # We are removing the explicit Streamlit warning here as it's already in the console
                 time.sleep(wait_time)
                 continue # Go to the next attempt
             
