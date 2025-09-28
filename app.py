@@ -34,7 +34,7 @@ Always provide empathetic, insightful, and reflective responses.
 GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# NEW: TTS Configuration
+# TTS Configuration
 TTS_MODEL = "gemini-2.5-flash-preview-tts"
 TTS_VOICE = "Kore" # A clear, firm voice, suitable for CBT
 
@@ -48,7 +48,7 @@ if "journals" not in st.session_state:
 # State for the delete confirmation logic
 if "confirm_delete" not in st.session_state:
     st.session_state.confirm_delete = False
-# NEW: State to temporarily hold the latest generated audio for playback
+# State to temporarily hold the latest generated audio for playback
 if "latest_wav_bytes" not in st.session_state:
     st.session_state.latest_wav_bytes = None
 
@@ -57,6 +57,7 @@ if "latest_wav_bytes" not in st.session_state:
 # Firebase Initialization
 # ----------------------
 try:
+    # Load the entire Firebase config from Streamlit secrets
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
 except KeyError as e:
     st.error(f"Missing secret key: {e}. Please ensure FIREBASE_CONFIG is set in your Streamlit secrets.")
@@ -67,17 +68,30 @@ except json.JSONDecodeError as e:
 
 if not firebase_admin._apps:
     try:
-        # --- FIX FOR "Invalid private key" ERROR ---
-        # The private key must have literal newline characters, not escaped ones (\n).
+        # --- ENHANCED FIX FOR "Invalid private key" ERROR ---
         if "private_key" in firebase_config:
-            # Replace escaped newlines and strip potential surrounding whitespace
-            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n").strip()
+            # 1. Aggressive newline replacement and stripping whitespace
+            key = firebase_config["private_key"].replace("\\n", "\n").strip()
+            
+            # 2. Check and remove surrounding quotes, which often happen when copy/pasting
+            if key.startswith('"') and key.endswith('"'):
+                key = key[1:-1]
+                
+            firebase_config["private_key"] = key
+            
+            # Diagnostic Log: Print the start of the processed key to help diagnose the input format
+            # This appears in the Streamlit console logs, not the UI.
+            print(f"DEBUG: Processed Private Key Starts With: {firebase_config['private_key'][:50]}...")
             
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
     except ValueError as e:
         st.error(f"Failed to initialize Firebase: {e}")
         st.stop()
+    except Exception as e:
+        st.error(f"An unknown error occurred during Firebase initialization: {e}")
+        st.stop()
+
 
 db = firestore.client()
 FIREBASE_API_KEY = st.secrets.get("FIREBASE_API_KEY")
@@ -682,7 +696,7 @@ else:
                 save_chat(uid, "ai", ai_text_reply) 
                 
                 # Store audio bytes in session state for instant playback after rerun
-                st.session_state.latest_wav_bytes = wav_bytes
+                 st.session_state.latest_wav_bytes = wav_bytes
 
             else:
                 # Handle error case
