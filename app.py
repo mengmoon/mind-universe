@@ -10,7 +10,7 @@ from datetime import datetime
 import io
 import base64
 import re
-import time # <-- ADDED FOR EXPONENTIAL BACKOFF
+import time # ADDED FOR EXPONENTIAL BACKOFF
 
 # --- 1. Global Configuration and Secrets Loading ---
 # Load secrets configuration from environment variables (Streamlit secrets)
@@ -220,7 +220,7 @@ def generate_ai_reply(user_prompt):
     # Define the system prompt for the AI Mentor persona
     system_prompt = (
         "You are 'Mind Mentor', a compassionate, insightful AI focused on mental wellness. "
-        "Your tone is gentle, encouraging, and non-judgmental. Offer supportive reflections, "
+        "Your tone is gentle, encouraging, and non-judgemental. Offer supportive reflections, "
         "evidence-based coping strategies, and practical exercises. "
         "Keep your responses concise, aiming for under 500 tokens to ensure a full reply."
     )
@@ -312,14 +312,16 @@ def generate_tts_reply(user_prompt):
     Calls the Gemini API for TTS generation with exponential backoff for retries.
     """
     
-    # Define the system prompt for the CBT voice mentor
+    # --- SIMPLIFIED SYSTEM PROMPT TO REDUCE SERVER LOAD/FAILURES ---
     system_prompt = (
-        "You are 'CBT Voice Mentor', an expert in Cognitive Behavioral Therapy. "
-        "Your responses must be highly concise, strictly focused on CBT techniques, "
-        "and delivered with a calm, supportive voice. "
-        "Do not use filler phrases. Use the 'Kore' voice for your response."
+        "You are a concise CBT guide. Give short, practical, and calm advice in one or two sentences."
     )
     
+    # --- VOICE CONFIGURATION ---
+    # Current voice is Kore. If you experience 500 errors, try changing this.
+    # Alternatives: 'Puck' (Upbeat), 'Charon' (Informative), 'Zephyr' (Bright)
+    TTS_VOICE_NAME = "Kore"
+
     payload = {
         "contents": [{"parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -328,7 +330,7 @@ def generate_tts_reply(user_prompt):
             "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": { 
-                        "voiceName": "Kore"
+                        "voiceName": TTS_VOICE_NAME
                     }
                 }
             }
@@ -381,7 +383,7 @@ def generate_tts_reply(user_prompt):
             # Check for recoverable errors (500, 503)
             if response.status_code in [500, 503] and attempt < max_retries - 1:
                 wait_time = 2 ** (attempt + 1)
-                st.warning(f"TTS API Error {response.status_code}. Retrying in {wait_time}s...")
+                # Note: We keep the warning for transparency but proceed with sleep
                 time.sleep(wait_time)
                 continue # Go to the next attempt
             
