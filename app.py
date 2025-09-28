@@ -317,21 +317,21 @@ def generate_tts_reply(user_prompt):
         "Do not use filler phrases. Use the 'Kore' voice for your response."
     )
     
-    # We don't send history for TTS to keep the context short and the response focused.
+    # --- FIX APPLIED HERE: speechConfig is now nested inside generationConfig ---
     payload = {
         "contents": [{"parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "generationConfig": {
-            "responseModalities": ["AUDIO"]
-        },
-        # TTS configuration is a top-level property for this model
-        "speechConfig": {
-            "voiceConfig": {
-                "prebuiltVoiceConfig": { 
-                    "voiceName": "Kore" # Firm, supportive voice
+            "responseModalities": ["AUDIO"],
+            "speechConfig": { # <-- CORRECT LOCATION
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": { 
+                        "voiceName": "Kore" # Firm, supportive voice
+                    }
                 }
             }
         }
+        # model is included in the URL: GEMINI_TTS_API_URL
     }
 
     try:
@@ -371,7 +371,13 @@ def generate_tts_reply(user_prompt):
         return tts_text, wav_bytes
 
     except requests.exceptions.RequestException as e:
-        st.error(f"ERROR: Could not generate voice response. Details: TTS API Error {response.status_code}: {response.text}")
+        # Check for non-standard API response errors
+        if response.status_code == 400:
+             error_message = f"TTS API Error 400. This might be due to the prompt itself (e.g., content policy violation or unsupported characters). Response: {response.text}"
+        else:
+            error_message = f"TTS API Request Failed: {e}"
+            
+        st.error(f"ERROR: Could not generate voice response. Details: {error_message}")
         return None, None
     except Exception as e:
         st.error(f"ERROR: An unexpected error occurred during TTS processing: {e}")
