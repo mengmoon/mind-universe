@@ -56,7 +56,6 @@ if "latest_wav_bytes" not in st.session_state:
 # ----------------------
 # Firebase Initialization
 # ----------------------
-# NOTE: The Firebase setup remains the same as it uses the service account key.
 try:
     firebase_config = json.loads(st.secrets["FIREBASE_CONFIG"])
 except KeyError as e:
@@ -68,9 +67,12 @@ except json.JSONDecodeError as e:
 
 if not firebase_admin._apps:
     try:
-        # Replace escaped newlines for certificate private key
+        # --- FIX FOR "Invalid private key" ERROR ---
+        # The private key must have literal newline characters, not escaped ones (\n).
         if "private_key" in firebase_config:
-            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+            # Replace escaped newlines and strip potential surrounding whitespace
+            firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n").strip()
+            
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
     except ValueError as e:
