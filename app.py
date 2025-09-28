@@ -84,6 +84,9 @@ if 'user_data_loaded' not in st.session_state:
     st.session_state.user_data_loaded = False
 if 'use_tts' not in st.session_state:
     st.session_state.use_tts = False
+# Initialize tab tracking state
+if 'current_tab' not in st.session_state:
+    st.session_state.current_tab = "💬 AI Mentor"
 
 
 def hash_password(password):
@@ -157,6 +160,7 @@ def logout():
     st.session_state.logged_in = False
     st.session_state.current_user_email = None
     st.session_state.user_data_loaded = False
+    st.session_state.current_tab = "💬 AI Mentor" # Reset tab state
     if 'chat_history' in st.session_state:
         st.session_state.chat_history = []
     if 'journal_entries' in st.session_state:
@@ -288,7 +292,8 @@ def generate_ai_text_reply(user_prompt):
         text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
         
         if not text:
-            st.error("The AI mentor's response was empty or filtered.")
+            # Explicitly log error if text is empty/filtered
+            st.error("The AI mentor's response was empty or filtered. Check API safety settings.")
             return None
             
         return text
@@ -486,12 +491,29 @@ def display_main_app():
                     st.info("Deletion cancelled.")
                     st.rerun()
 
-    # --- Tabbed Application Interface ---
+    # --- Navigation (Replaced Tabs with Radio for state persistence) ---
+    view_options = ["✍️ Wellness Journal", "💬 AI Mentor", "🎙️ Voice Input"]
+    
+    # Use st.radio to track the selected view, ensuring persistence across reruns
+    selected_view = st.radio(
+        "Navigation",
+        view_options,
+        index=view_options.index(st.session_state.current_tab),
+        horizontal=True,
+        label_visibility="hidden"
+    )
+    
+    # Update session state if user manually clicks a new view
+    if selected_view != st.session_state.current_tab:
+        st.session_state.current_tab = selected_view
+        st.rerun()
+        
+    st.divider()
 
-    tab_journal, tab_mentor, tab_voice = st.tabs(["✍️ Wellness Journal", "💬 AI Mentor", "🎙️ Voice Input"])
-
-    # --- Tab 1: Wellness Journal ---
-    with tab_journal:
+    # --- Content Display based on selected_view ---
+    
+    # --- Content 1: Wellness Journal ---
+    if st.session_state.current_tab == "✍️ Wellness Journal":
         st.header("Reflect & Record")
         st.caption("Your private space for logging thoughts, feelings, and progress.")
 
@@ -523,9 +545,9 @@ def display_main_app():
                     st.markdown(entry.get('content'))
         else:
             st.info("No journal entries found. Start writing above!")
-
-    # --- Tab 2: AI Mentor (Text Chat) ---
-    with tab_mentor:
+            
+    # --- Content 2: AI Mentor (Text Chat) ---
+    elif st.session_state.current_tab == "💬 AI Mentor":
         st.header("Ask Your Mentor")
         st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
         
@@ -570,11 +592,12 @@ def display_main_app():
                     ai_response_text = generate_ai_text_reply(prompt)
                     ai_response_audio = None
                     
-                    if ai_response_text and st.session_state.use_tts:
-                        # Generate TTS Audio
-                        with st.spinner("Generating voice response..."):
-                            # Only send the text response for speaking
-                            ai_response_audio = generate_tts_audio(ai_response_text)
+                    if ai_response_text:
+                        if st.session_state.use_tts:
+                            # Generate TTS Audio
+                            with st.spinner("Generating voice response..."):
+                                # Only send the text response for speaking
+                                ai_response_audio = generate_tts_audio(ai_response_text)
                     
                 if ai_response_text:
                     st.markdown(ai_response_text)
@@ -592,13 +615,17 @@ def display_main_app():
                     # Save the response (text and optional audio)
                     save_chat_message("model", ai_response_text, ai_response_audio)
                     st.rerun() # Force rerun to update the chat history display immediately
+                else:
+                    st.error("Failed to receive a reply from the AI Mentor. Please try again.")
 
-    # --- Tab 3: Voice Input ---
-    with tab_voice:
+    # --- Content 3: Voice Input ---
+    elif st.session_state.current_tab == "🎙️ Voice Input":
         st.header("🎙️ Voice Input (Push-to-Talk Simulation)")
-        st.caption("Interact with Mind Mentor hands-free. The response will be visible in the 'AI Mentor' tab.")
+        st.caption("Interact with Mind Mentor hands-free. The response will be visible in the 'AI Mentor' section.")
         
-        st.info("Since Streamlit runs on a Python server, we cannot directly access your microphone for Speech-to-Text (STT). We'll simulate the process by having you type what you would have spoken into the box below.")
+        # --- Improved clarity on limitation ---
+        st.error("❗ **Limitation Notice:** This environment (Streamlit/Python) prevents direct access to your microphone for Speech-to-Text (STT). This feature simulates PTT: you type what you would have spoken, and the app processes it like a voice command.")
+        # ----------------------------------------
         
         with st.form("voice_input_form", clear_on_submit=True):
             # This simulates the transcribed text from an STT model
@@ -609,7 +636,7 @@ def display_main_app():
             )
 
             # This simulates the "release" of the push-to-talk button
-            voice_submitted = st.form_submit_button("2. Send Spoken Message to Mentor (Simulated STT)", type="primary")
+            voice_submitted = st.form_submit_button("2. Send Spoken Message to Mentor (Simulated PTT)", type="primary")
 
             if voice_submitted and spoken_prompt:
                 
@@ -618,23 +645,33 @@ def display_main_app():
                 save_chat_message("user", spoken_prompt)
 
                 with st.spinner("Mind Mentor is reflecting on your spoken words..."):
+                    
                     # 2. Generate text reply
                     ai_response_text = generate_ai_text_reply(spoken_prompt)
                     ai_response_audio = None
                     
-                    if ai_response_text and st.session_state.use_tts:
-                        # 3. Generate TTS Audio if enabled
-                        with st.spinner("Generating voice response..."):
-                            ai_response_audio = generate_tts_audio(ai_response_text)
-                            
-                if ai_response_text:
-                    # 4. Save the response (text and optional audio)
-                    save_chat_message("model", ai_response_text, ai_response_audio)
-                    
-                    st.success("Message sent! Check the 'AI Mentor' tab for the response (and audio if TTS is enabled).")
-                    
-                    st.rerun()
-                
+                    if ai_response_text:
+                        
+                        if st.session_state.use_tts:
+                            # 3. Generate TTS Audio if enabled
+                            with st.spinner("Generating voice response..."):
+                                ai_response_audio = generate_tts_audio(ai_response_text)
+                                
+                        # 4. Save the response (text and optional audio)
+                        save_chat_message("model", ai_response_text, ai_response_audio)
+                        
+                        # --- FIX: Switch view to AI Mentor for reply ---
+                        st.session_state.current_tab = "💬 AI Mentor"
+                        # ------------------------------------------
+                        
+                        st.success("Message sent! Switching to 'AI Mentor' to display the response and audio.")
+                        
+                        st.rerun()
+                        
+                    else:
+                         # Handle the "no reply" case explicitly
+                        st.error("Failed to receive a reply from the AI Mentor. Please try again.")
+
             elif voice_submitted and not spoken_prompt:
                 st.warning("Please type your simulated spoken message.")
 # --- Main Application Logic ---
