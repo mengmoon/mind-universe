@@ -1,6 +1,6 @@
 # --- Mind Universe: A Digital Space for Mental Wellness and Self-Exploration ---
 # Uses Streamlit for the UI, Firebase for secure data persistence, and
-# Google Gemini API for AI chat (text only) and Text-to-Speech (TTS).
+# Google Gemini API for AI chat (text only).
 
 import streamlit as st
 import requests
@@ -8,7 +8,6 @@ import json
 import pandas as pd
 from datetime import datetime
 import hashlib # Used for simple password hashing simulation
-import base64 # Needed for handling TTS base64 audio data
 
 # --- 1. Global Configuration and Secrets Loading ---
 # Load secrets configuration from environment variables (Streamlit secrets)
@@ -82,7 +81,6 @@ if 'current_user_email' not in st.session_state:
     st.session_state.current_user_email = None
 if 'user_data_loaded' not in st.session_state:
     st.session_state.user_data_loaded = False
-# Removed 'use_tts' state as the UI toggle is gone.
 # Initialize tab tracking state
 if 'current_tab' not in st.session_state:
     st.session_state.current_tab = "💬 AI Mentor"
@@ -205,14 +203,13 @@ def load_data_from_firestore(user_id):
         return [], []
 
 # Firebase Write Functions
-def save_chat_message(role, content, audio_data=None):
+def save_chat_message(role, content):
     """Saves a single chat message to Firestore and updates session state."""
     timestamp = datetime.now().timestamp()
     message = {
         "role": role,
         "content": content,
         "timestamp": timestamp,
-        "audio_data": audio_data # Save audio data if available (e.g. from past use)
     }
     try:
         chat_ref = get_user_chat_collection_ref(st.session_state.current_user_email)
@@ -241,14 +238,11 @@ def save_journal_entry(date, title, content):
         st.error(f"Failed to save journal entry: {e}")
 
 
-# --- 5. LLM API Call Functions (Gemini Text and TTS) ---
+# --- 5. LLM API Call Functions (Gemini Text) ---
 
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
-GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
-TTS_VOICE_NAME = "Kore" # Using a clear voice (Kore: Firm)
 
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
-GEMINI_TTS_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
 def generate_ai_text_reply(user_prompt):
     """Calls the Gemini API for text generation."""
@@ -304,48 +298,6 @@ def generate_ai_text_reply(user_prompt):
         st.error(f"An unexpected error occurred (Text): {e}")
         return None
 
-def generate_tts_audio(text_to_speak):
-    """Calls the Gemini TTS API and returns base64 audio data.
-    
-    NOTE: This function is retained to process any old messages with audio_data 
-    but is no longer called during new chat generation.
-    """
-    
-    payload = {
-        "contents": [{
-            "parts": [{ "text": text_to_speak }]
-        }],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": { "voiceName": TTS_VOICE_NAME }
-                }
-            }
-        },
-        "model": GEMINI_TTS_MODEL
-    }
-
-    try:
-        tts_response = requests.post(
-            GEMINI_TTS_API_URL, 
-            headers={'Content-Type': 'application/json'}, 
-            data=json.dumps(payload)
-        )
-        tts_response.raise_for_status()
-        tts_result = tts_response.json()
-
-        part = tts_result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0]
-        audio_data_base64 = part.get('inlineData', {}).get('data')
-        
-        return audio_data_base64
-
-    except requests.exceptions.RequestException as e:
-        st.warning(f"TTS API Request Failed: {e}")
-        return None
-    except Exception as e:
-        st.warning(f"An unexpected error occurred (TTS): {e}")
-        return None
 
 # --- 6. UI Components ---
 
@@ -438,8 +390,6 @@ def display_main_app():
                     role = message.get('role', 'unknown').upper()
                     content = message.get('content', '')
                     export_text += f"[{time_str}] {role}: {content}\n"
-                    if message.get('audio_data'):
-                        export_text += f"[-- AUDIO DATA STORED --]\n"
             else:
                 export_text += "No chat messages found.\n"
                 
@@ -555,8 +505,6 @@ def display_main_app():
         st.header("Ask Your Mentor")
         st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
         
-        # TTS Toggle and Warning removed as requested.
-        
         st.divider()
 
         # Display chat history
@@ -565,20 +513,6 @@ def display_main_app():
             avatar = "👤" if role == "user" else "🧠"
             with st.chat_message(role, avatar=avatar):
                 st.markdown(message["content"])
-                
-                # Display audio if available and role is assistant (retained for old messages)
-                if message.get("audio_data") and role == "assistant":
-                    audio_base64 = message["audio_data"]
-                    # Use a data URI for the audio tag. Mime type for raw PCM is audio/L16.
-                    # We use audio/wav as a general fallback for browser rendering, though conversion is still needed.
-                    audio_html = f"""
-                    <audio controls autoplay style="width: 100%;">
-                        <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
-                        Your browser does not support the audio element.
-                    </audio>
-                    """
-                    st.markdown(audio_html, unsafe_allow_html=True)
-
 
         # Chat input
         if prompt := st.chat_input("Type your message to Mind Mentor..."):
@@ -591,48 +525,15 @@ def display_main_app():
             with st.chat_message("assistant", avatar="🧠"):
                 with st.spinner("Mind Mentor is reflecting..."):
                     ai_response_text = generate_ai_text_reply(prompt)
-                    ai_response_audio = None # Audio generation is now explicitly skipped
                     
                 if ai_response_text:
                     st.markdown(ai_response_text)
                     
                     # Save the response (text only)
-                    save_chat_message("model", ai_response_text, ai_response_audio)
+                    save_chat_message("model", ai_response_text)
                     st.rerun() # Force rerun to update the chat history display immediately
                 else:
                     st.error("Failed to receive a reply from the AI Mentor. Please try again.")
-
-
-from push_to_talk import push_to_talk
-import openai
-
-st.header("🎙️ Voice Mentor")
-
-audio_file = push_to_talk()
-
-if audio_file:
-    # Whisper STT
-    transcript = openai.audio.transcriptions.create(
-        model="whisper-1",
-        file=open(audio_file, "rb")
-    )
-    user_text = transcript.text
-    st.write("🗣️ You:", user_text)
-
-    # Gemini reply
-    ai_reply = generate_ai_reply(user_text)
-
-    # TTS
-    speech = openai.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=ai_reply
-    )
-    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    out_file.write(speech.read())
-    st.audio(out_file.name, format="audio/mp3")
-
-
 
 # --- Main Application Logic ---
 
