@@ -696,7 +696,7 @@ else:
                 save_chat(uid, "ai", ai_text_reply) 
                 
                 # Store audio bytes in session state for instant playback after rerun
-                 st.session_state.latest_wav_bytes = wav_bytes
+                st.session_state.latest_wav_bytes = wav_bytes
 
             else:
                 # Handle error case
