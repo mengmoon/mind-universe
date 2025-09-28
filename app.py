@@ -602,6 +602,38 @@ def display_main_app():
                 else:
                     st.error("Failed to receive a reply from the AI Mentor. Please try again.")
 
+
+from push_to_talk import push_to_talk
+import openai
+
+st.header("🎙️ Voice Mentor")
+
+audio_file = push_to_talk()
+
+if audio_file:
+    # Whisper STT
+    transcript = openai.audio.transcriptions.create(
+        model="whisper-1",
+        file=open(audio_file, "rb")
+    )
+    user_text = transcript.text
+    st.write("🗣️ You:", user_text)
+
+    # Gemini reply
+    ai_reply = generate_ai_reply(user_text)
+
+    # TTS
+    speech = openai.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",
+        input=ai_reply
+    )
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    out_file.write(speech.read())
+    st.audio(out_file.name, format="audio/mp3")
+
+
+
 # --- Main Application Logic ---
 
 if __name__ == '__main__':
