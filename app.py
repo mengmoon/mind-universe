@@ -1,13 +1,9 @@
-# --- Mind Universe: A Digital Space for Mental Wellness and Self-Exploration ---
-# Uses Streamlit for the UI, Firebase for secure data persistence, and
-# Google Gemini API for AI chat (text only).
-
 import streamlit as st
 import requests
 import json
 import pandas as pd
 from datetime import datetime
-import hashlib # Used for simple password hashing simulation
+import hashlib 
 
 # --- 1. Global Configuration and Secrets Loading ---
 # Load secrets configuration from environment variables (Streamlit secrets)
@@ -25,13 +21,15 @@ try:
     firebaseConfig = json.loads(firebase_config_str)
     
 except Exception as e:
+    # Note: In a real Streamlit app, this would be st.error/st.exception
+    # Here, we keep the original error handling for the Streamlit environment.
     st.error(f"Failed to parse FIREBASE_CONFIG as JSON. Ensure the format is correct: {e}")
     st.stop()
 
 # Load Gemini API Key
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
-    st.error("GEMINI_API_KEY not found in Streamlit secrets. Please configure it to use the AI Mentor.")
+    st.error("GEMINI_API_KEY not found in Streamlit secrets. Please configure it to use the AI Mentor and Insights.")
     st.stop()
 
 # --- 2. Firebase Initialization and Authentication ---
@@ -84,7 +82,8 @@ if 'user_data_loaded' not in st.session_state:
 # Initialize tab tracking state
 if 'current_tab' not in st.session_state:
     st.session_state.current_tab = "💬 AI Mentor"
-
+if 'journal_analysis' not in st.session_state:
+    st.session_state.journal_analysis = None # To store the analysis result
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -92,9 +91,8 @@ def hash_password(password):
 
 def get_users_collection_ref():
     """Returns the Firestore reference for the global users collection (public/data path)."""
-    # This is a general collection for all app users
-    app_id = firebaseConfig["project_id"]
     # Path: /artifacts/{appId}/public/data/users
+    app_id = firebaseConfig["project_id"]
     return db.collection('artifacts').document(app_id).collection('public').document('data').collection('users')
 
 def login_user(email, password):
@@ -158,6 +156,7 @@ def logout():
     st.session_state.current_user_email = None
     st.session_state.user_data_loaded = False
     st.session_state.current_tab = "💬 AI Mentor" # Reset tab state
+    st.session_state.journal_analysis = None
     if 'chat_history' in st.session_state:
         st.session_state.chat_history = []
     if 'journal_entries' in st.session_state:
@@ -233,6 +232,7 @@ def save_journal_entry(date, title, content):
         # Force reload and update session state
         _, new_journal_data = load_data_from_firestore(st.session_state.current_user_email)
         st.session_state.journal_entries = new_journal_data
+        st.session_state.journal_analysis = None # Clear previous analysis
         st.success("Journal entry saved!")
     except Exception as e:
         st.error(f"Failed to save journal entry: {e}")
@@ -241,17 +241,16 @@ def save_journal_entry(date, title, content):
 # --- 5. LLM API Call Functions (Gemini Text) ---
 
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
-
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
-def generate_ai_text_reply(user_prompt):
-    """Calls the Gemini API for text generation."""
+def generate_ai_text_reply(user_prompt, history):
+    """Calls the Gemini API for standard text generation (AI Mentor)."""
     
     # Construct chat history for context
     chat_contents = [
         {"role": "user" if msg["role"] == "user" else "model", 
          "parts": [{"text": msg["content"]}]}
-        for msg in st.session_state.chat_history
+        for msg in history
     ]
     chat_contents.append({"role": "user", "parts": [{"text": user_prompt}]})
 
@@ -284,19 +283,58 @@ def generate_ai_text_reply(user_prompt):
         candidate = result.get('candidates', [{}])[0]
         text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
         
-        if not text:
-            # Explicitly log error if text is empty/filtered
-            st.error("The AI mentor's response was empty or filtered. Check API safety settings.")
-            return None
-            
         return text
 
     except requests.exceptions.RequestException as e:
-        st.error(f"API Request Failed (Text): {e}")
+        st.error(f"API Request Failed (Mentor Chat): {e}")
         return None
     except Exception as e:
-        st.error(f"An unexpected error occurred (Text): {e}")
+        st.error(f"An unexpected error occurred (Mentor Chat): {e}")
         return None
+
+def generate_journal_analysis(journal_text_block):
+    """Calls the Gemini API for structured journal analysis (Insights)."""
+    
+    # Define the system prompt for the AI Analyst persona
+    system_prompt = (
+        "You are 'Mind Analyst', an objective yet gentle AI. Your task is to analyze the user's "
+        "journal entries to identify the primary **Sentiment Trend** (e.g., Mixed, Generally Positive), "
+        "extract **3-5 Key Recurring Themes** (e.g., career, family, health), and generate a **One-Paragraph Summary of Overall Emotional State**. "
+        "Respond ONLY with a clear, formatted summary using Markdown headings for clarity, and be objective yet gentle. "
+        "DO NOT use a conversational opening or closing. Just provide the analysis."
+    )
+    
+    user_prompt = f"Analyze the following block of journal entries:\n\n---\n{journal_text_block}"
+    
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {
+            "maxOutputTokens": 800,
+            "temperature": 0.5
+        }
+    }
+
+    try:
+        response = requests.post(
+            GEMINI_API_URL, 
+            headers={'Content-Type': 'application/json'}, 
+            data=json.dumps(payload)
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        candidate = result.get('candidates', [{}])[0]
+        text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
+        
+        return text
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"API Request Failed (Analysis): {e}")
+        return "Analysis failed due to an API error."
+    except Exception as e:
+        st.error(f"An unexpected error occurred (Analysis): {e}")
+        return "Analysis failed due to an unexpected error."
 
 
 # --- 6. UI Components ---
@@ -364,7 +402,7 @@ def display_main_app():
         st.subheader("Data Management")
         st.caption("Securely store and manage your data with Firebase.")
         
-        # Download/Export function remains the same
+        # Download/Export function
         def generate_export_content():
             export_text = f"--- Mind Universe Data Export for User: {st.session_state.current_user_email} ---\n"
             export_text += f"Export Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -403,7 +441,7 @@ def display_main_app():
             help="Downloads all journal entries and chat history into a single text file."
         )
         
-        # --- Clear History (Delete functionality remains) ---
+        # --- Clear History (Delete functionality) ---
         st.subheader("⚠️ Clear History")
         
         if st.button("Clear All History (Requires Reload)", type="secondary", help="Permanently deletes all chat and journal data."):
@@ -444,11 +482,10 @@ def display_main_app():
                     st.info("Deletion cancelled.")
                     st.rerun()
 
-    # --- Navigation (Replaced Tabs with Radio for state persistence) ---
-    # Rolled back to only Journal and AI Mentor tabs.
-    view_options = ["✍️ Wellness Journal", "💬 AI Mentor"]
+    # --- Navigation ---
+    view_options = ["💬 AI Mentor", "✍️ Wellness Journal", "📊 Insights"]
     
-    # Use st.radio to track the selected view, ensuring persistence across reruns
+    # Use st.radio to track the selected view
     selected_view = st.radio(
         "Navigation",
         view_options,
@@ -466,8 +503,43 @@ def display_main_app():
 
     # --- Content Display based on selected_view ---
     
-    # --- Content 1: Wellness Journal ---
-    if st.session_state.current_tab == "✍️ Wellness Journal":
+    # --- Content 1: AI Mentor (Text Chat) ---
+    if st.session_state.current_tab == "💬 AI Mentor":
+        st.header("Ask Your Mentor")
+        st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
+        
+        st.divider()
+
+        # Display chat history
+        for message in st.session_state.chat_history:
+            role = "user" if message["role"] == "user" else "assistant"
+            avatar = "👤" if role == "user" else "🧠"
+            with st.chat_message(role, avatar=avatar):
+                st.markdown(message["content"])
+
+        # Chat input
+        if prompt := st.chat_input("Type your message to Mind Mentor..."):
+            # Display user message and save
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(prompt)
+            save_chat_message("user", prompt)
+
+            # Generate AI response (Text only)
+            with st.chat_message("assistant", avatar="🧠"):
+                with st.spinner("Mind Mentor is reflecting..."):
+                    ai_response_text = generate_ai_text_reply(prompt, st.session_state.chat_history)
+                    
+                if ai_response_text:
+                    st.markdown(ai_response_text)
+                    
+                    # Save the response (text only)
+                    save_chat_message("model", ai_response_text)
+                    st.rerun() # Force rerun to update the chat history display immediately
+                else:
+                    st.error("Failed to receive a reply from the AI Mentor. Please try again.")
+
+    # --- Content 2: Wellness Journal ---
+    elif st.session_state.current_tab == "✍️ Wellness Journal":
         st.header("Reflect & Record")
         st.caption("Your private space for logging thoughts, feelings, and progress.")
 
@@ -499,41 +571,41 @@ def display_main_app():
                     st.markdown(entry.get('content'))
         else:
             st.info("No journal entries found. Start writing above!")
-            
-    # --- Content 2: AI Mentor (Text Chat) ---
-    elif st.session_state.current_tab == "💬 AI Mentor":
-        st.header("Ask Your Mentor")
-        st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
+
+    # --- Content 3: Insights (New Feature) ---
+    elif st.session_state.current_tab == "📊 Insights":
+        st.header("AI-Powered Insights")
+        st.caption("Analyze your recent entries to discover emotional trends and recurring themes.")
         
-        st.divider()
-
-        # Display chat history
-        for message in st.session_state.chat_history:
-            role = "user" if message["role"] == "user" else "assistant"
-            avatar = "👤" if role == "user" else "🧠"
-            with st.chat_message(role, avatar=avatar):
-                st.markdown(message["content"])
-
-        # Chat input
-        if prompt := st.chat_input("Type your message to Mind Mentor..."):
-            # Display user message and save
-            with st.chat_message("user", avatar="👤"):
-                st.markdown(prompt)
-            save_chat_message("user", prompt)
-
-            # Generate AI response (Text only)
-            with st.chat_message("assistant", avatar="🧠"):
-                with st.spinner("Mind Mentor is reflecting..."):
-                    ai_response_text = generate_ai_text_reply(prompt)
+        if not st.session_state.journal_entries:
+            st.info("You need to write a few journal entries before generating insights.")
+            
+        else:
+            # Prepare the journal content for analysis (using the last 10 entries)
+            entries_to_analyze = st.session_state.journal_entries[:10]
+            
+            # Create a single block of text for the model to process
+            journal_text_block = ""
+            for i, entry in enumerate(entries_to_analyze):
+                journal_text_block += f"=== Entry {i+1} ({entry.get('date', 'N/A')}): {entry.get('title', 'No Title')} ===\n"
+                journal_text_block += f"{entry.get('content', '')}\n\n"
+            
+            # Button to trigger analysis
+            if st.button(f"Generate Insights from Last {len(entries_to_analyze)} Entries", type="primary"):
+                st.session_state.journal_analysis = None # Clear previous
+                with st.spinner("Mind Analyst is reading your reflections..."):
+                    analysis_result = generate_journal_analysis(journal_text_block)
+                    st.session_state.journal_analysis = analysis_result
                     
-                if ai_response_text:
-                    st.markdown(ai_response_text)
-                    
-                    # Save the response (text only)
-                    save_chat_message("model", ai_response_text)
-                    st.rerun() # Force rerun to update the chat history display immediately
-                else:
-                    st.error("Failed to receive a reply from the AI Mentor. Please try again.")
+            st.divider()
+            
+            # Display analysis result
+            if st.session_state.journal_analysis:
+                st.subheader("Analysis Results")
+                st.markdown(st.session_state.journal_analysis)
+            else:
+                st.info("Click the button above to generate a new analysis of your recent journal entries.")
+
 
 # --- Main Application Logic ---
 
