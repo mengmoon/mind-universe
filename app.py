@@ -1,6 +1,6 @@
 # --- Mind Universe: A Digital Space for Mental Wellness and Self-Exploration ---
 # Uses Streamlit for the UI, Firebase for secure data persistence, and
-# Google Gemini API for AI chat (text only).
+# Google Gemini API for AI chat (text only) and Text-to-Speech (TTS).
 
 import streamlit as st
 import requests
@@ -8,6 +8,7 @@ import json
 import pandas as pd
 from datetime import datetime
 import hashlib # Used for simple password hashing simulation
+import base64 # Needed for handling TTS base64 audio data
 
 # --- 1. Global Configuration and Secrets Loading ---
 # Load secrets configuration from environment variables (Streamlit secrets)
@@ -81,6 +82,8 @@ if 'current_user_email' not in st.session_state:
     st.session_state.current_user_email = None
 if 'user_data_loaded' not in st.session_state:
     st.session_state.user_data_loaded = False
+if 'use_tts' not in st.session_state:
+    st.session_state.use_tts = False
 
 
 def hash_password(password):
@@ -154,8 +157,10 @@ def logout():
     st.session_state.logged_in = False
     st.session_state.current_user_email = None
     st.session_state.user_data_loaded = False
-    st.session_state.chat_history = []
-    st.session_state.journal_entries = []
+    if 'chat_history' in st.session_state:
+        st.session_state.chat_history = []
+    if 'journal_entries' in st.session_state:
+        st.session_state.journal_entries = []
     st.info("You have been logged out.")
     st.rerun()
 
@@ -197,13 +202,14 @@ def load_data_from_firestore(user_id):
         return [], []
 
 # Firebase Write Functions
-def save_chat_message(role, content):
+def save_chat_message(role, content, audio_data=None):
     """Saves a single chat message to Firestore and updates session state."""
     timestamp = datetime.now().timestamp()
     message = {
         "role": role,
         "content": content,
-        "timestamp": timestamp
+        "timestamp": timestamp,
+        "audio_data": audio_data # Save audio data if available
     }
     try:
         chat_ref = get_user_chat_collection_ref(st.session_state.current_user_email)
@@ -232,12 +238,16 @@ def save_journal_entry(date, title, content):
         st.error(f"Failed to save journal entry: {e}")
 
 
-# --- 5. LLM API Call Function (Gemini) ---
+# --- 5. LLM API Call Functions (Gemini Text and TTS) ---
 
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
+GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+TTS_VOICE_NAME = "Kore" # Using a clear voice (Kore: Firm)
 
-def generate_ai_reply(user_prompt):
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
+GEMINI_TTS_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+def generate_ai_text_reply(user_prompt):
     """Calls the Gemini API for text generation."""
     
     # Construct chat history for context
@@ -284,10 +294,49 @@ def generate_ai_reply(user_prompt):
         return text
 
     except requests.exceptions.RequestException as e:
-        st.error(f"API Request Failed: {e}")
+        st.error(f"API Request Failed (Text): {e}")
         return None
     except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+        st.error(f"An unexpected error occurred (Text): {e}")
+        return None
+
+def generate_tts_audio(text_to_speak):
+    """Calls the Gemini TTS API and returns base64 audio data."""
+    
+    payload = {
+        "contents": [{
+            "parts": [{ "text": text_to_speak }]
+        }],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": { "voiceName": TTS_VOICE_NAME }
+                }
+            }
+        },
+        "model": GEMINI_TTS_MODEL
+    }
+
+    try:
+        tts_response = requests.post(
+            GEMINI_TTS_API_URL, 
+            headers={'Content-Type': 'application/json'}, 
+            data=json.dumps(payload)
+        )
+        tts_response.raise_for_status()
+        tts_result = tts_response.json()
+
+        part = tts_result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0]
+        audio_data_base64 = part.get('inlineData', {}).get('data')
+        
+        return audio_data_base64
+
+    except requests.exceptions.RequestException as e:
+        st.warning(f"TTS API Request Failed: {e}")
+        return None
+    except Exception as e:
+        st.warning(f"An unexpected error occurred (TTS): {e}")
         return None
 
 # --- 6. UI Components ---
@@ -381,6 +430,8 @@ def display_main_app():
                     role = message.get('role', 'unknown').upper()
                     content = message.get('content', '')
                     export_text += f"[{time_str}] {role}: {content}\n"
+                    if message.get('audio_data'):
+                        export_text += f"[-- AUDIO DATA STORED --]\n"
             else:
                 export_text += "No chat messages found.\n"
                 
@@ -477,6 +528,13 @@ def display_main_app():
     with tab_mentor:
         st.header("Ask Your Mentor")
         st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
+        
+        # TTS Toggle and Warning
+        st.session_state.use_tts = st.checkbox("Enable AI Voice Response (TTS)", value=st.session_state.use_tts)
+        if st.session_state.use_tts:
+            st.warning("⚠️ The TTS API returns raw audio data (PCM). Playback in this Streamlit environment may not work correctly without browser-side conversion. Functionality is included to demonstrate integration.")
+        
+        st.divider()
 
         # Display chat history
         for message in st.session_state.chat_history:
@@ -484,6 +542,20 @@ def display_main_app():
             avatar = "👤" if role == "user" else "🧠"
             with st.chat_message(role, avatar=avatar):
                 st.markdown(message["content"])
+                
+                # Display audio if available and role is assistant
+                if message.get("audio_data") and role == "assistant":
+                    audio_base64 = message["audio_data"]
+                    # Use a data URI for the audio tag. Mime type for raw PCM is audio/L16.
+                    # We use audio/wav as a general fallback for browser rendering, though conversion is still needed.
+                    audio_html = f"""
+                    <audio controls autoplay style="width: 100%;">
+                        <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
+                        Your browser does not support the audio element.
+                    </audio>
+                    """
+                    st.markdown(audio_html, unsafe_allow_html=True)
+
 
         # Chat input
         if prompt := st.chat_input("Ask your Mind Mentor a question..."):
@@ -492,14 +564,33 @@ def display_main_app():
                 st.markdown(prompt)
             save_chat_message("user", prompt)
 
-            # Generate AI response
+            # Generate AI response (Text first)
             with st.chat_message("assistant", avatar="🧠"):
                 with st.spinner("Mind Mentor is reflecting..."):
-                    ai_response = generate_ai_reply(prompt)
+                    ai_response_text = generate_ai_text_reply(prompt)
+                    ai_response_audio = None
                     
-                if ai_response:
-                    st.markdown(ai_response)
-                    save_chat_message("model", ai_response)
+                    if ai_response_text and st.session_state.use_tts:
+                        # Generate TTS Audio
+                        with st.spinner("Generating voice response..."):
+                            # Only send the text response for speaking
+                            ai_response_audio = generate_tts_audio(ai_response_text)
+                    
+                if ai_response_text:
+                    st.markdown(ai_response_text)
+                    
+                    # Display the audio player if audio data was generated (for the current turn only)
+                    if ai_response_audio:
+                        audio_html = f"""
+                        <audio controls autoplay style="width: 100%;">
+                            <source src="data:audio/wav;base64,{ai_response_audio}" type="audio/wav">
+                            Your browser does not support the audio element.
+                        </audio>
+                        """
+                        st.markdown(audio_html, unsafe_allow_html=True)
+                        
+                    # Save the response (text and optional audio)
+                    save_chat_message("model", ai_response_text, ai_response_audio)
                     st.rerun() # Force rerun to update the chat history display immediately
 
 # --- Main Application Logic ---
