@@ -492,7 +492,8 @@ def display_main_app():
                     st.rerun()
 
     # --- Navigation (Replaced Tabs with Radio for state persistence) ---
-    view_options = ["✍️ Wellness Journal", "💬 AI Mentor", "🎙️ Voice Input"]
+    # Rolled back to only Journal and AI Mentor tabs.
+    view_options = ["✍️ Wellness Journal", "💬 AI Mentor"]
     
     # Use st.radio to track the selected view, ensuring persistence across reruns
     selected_view = st.radio(
@@ -618,62 +619,6 @@ def display_main_app():
                 else:
                     st.error("Failed to receive a reply from the AI Mentor. Please try again.")
 
-    # --- Content 3: Voice Input ---
-    elif st.session_state.current_tab == "🎙️ Voice Input":
-        st.header("🎙️ Voice Input (Push-to-Talk Simulation)")
-        st.caption("Interact with Mind Mentor hands-free. The response will be visible in the 'AI Mentor' section.")
-        
-        # --- Improved clarity on limitation ---
-        st.error("❗ **Limitation Notice:** This environment (Streamlit/Python) prevents direct access to your microphone for Speech-to-Text (STT). This feature simulates PTT: you type what you would have spoken, and the app processes it like a voice command.")
-        # ----------------------------------------
-        
-        with st.form("voice_input_form", clear_on_submit=True):
-            # This simulates the transcribed text from an STT model
-            spoken_prompt = st.text_area(
-                "1. Type your transcribed voice message here:", 
-                height=150,
-                placeholder="E.g., 'Mind Mentor, I'm feeling stressed about my work deadlines. What's a quick coping technique?'"
-            )
-
-            # This simulates the "release" of the push-to-talk button
-            voice_submitted = st.form_submit_button("2. Send Spoken Message to Mentor (Simulated PTT)", type="primary")
-
-            if voice_submitted and spoken_prompt:
-                
-                # Execute the chat logic:
-                # 1. Save user prompt
-                save_chat_message("user", spoken_prompt)
-
-                with st.spinner("Mind Mentor is reflecting on your spoken words..."):
-                    
-                    # 2. Generate text reply
-                    ai_response_text = generate_ai_text_reply(spoken_prompt)
-                    ai_response_audio = None
-                    
-                    if ai_response_text:
-                        
-                        if st.session_state.use_tts:
-                            # 3. Generate TTS Audio if enabled
-                            with st.spinner("Generating voice response..."):
-                                ai_response_audio = generate_tts_audio(ai_response_text)
-                                
-                        # 4. Save the response (text and optional audio)
-                        save_chat_message("model", ai_response_text, ai_response_audio)
-                        
-                        # --- FIX: Switch view to AI Mentor for reply ---
-                        st.session_state.current_tab = "💬 AI Mentor"
-                        # ------------------------------------------
-                        
-                        st.success("Message sent! Switching to 'AI Mentor' to display the response and audio.")
-                        
-                        st.rerun()
-                        
-                    else:
-                         # Handle the "no reply" case explicitly
-                        st.error("Failed to receive a reply from the AI Mentor. Please try again.")
-
-            elif voice_submitted and not spoken_prompt:
-                st.warning("Please type your simulated spoken message.")
 # --- Main Application Logic ---
 
 if __name__ == '__main__':
