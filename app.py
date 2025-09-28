@@ -10,6 +10,7 @@ from datetime import datetime
 import io
 import base64
 import re
+import time # <-- ADDED FOR EXPONENTIAL BACKOFF
 
 # --- 1. Global Configuration and Secrets Loading ---
 # Load secrets configuration from environment variables (Streamlit secrets)
@@ -307,8 +308,10 @@ def pcm_to_wav(pcm_data, sample_rate=24000, channels=1, bits_per_sample=16):
     return wav_bytes
 
 def generate_tts_reply(user_prompt):
-    """Calls the Gemini API for TTS generation with a CBT persona."""
-
+    """
+    Calls the Gemini API for TTS generation with exponential backoff for retries.
+    """
+    
     # Define the system prompt for the CBT voice mentor
     system_prompt = (
         "You are 'CBT Voice Mentor', an expert in Cognitive Behavioral Therapy. "
@@ -317,71 +320,81 @@ def generate_tts_reply(user_prompt):
         "Do not use filler phrases. Use the 'Kore' voice for your response."
     )
     
-    # --- FIX APPLIED HERE: speechConfig is now nested inside generationConfig ---
     payload = {
         "contents": [{"parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "generationConfig": {
             "responseModalities": ["AUDIO"],
-            "speechConfig": { # <-- CORRECT LOCATION
+            "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": { 
-                        "voiceName": "Kore" # Firm, supportive voice
+                        "voiceName": "Kore"
                     }
                 }
             }
         }
-        # model is included in the URL: GEMINI_TTS_API_URL
     }
 
-    try:
-        response = requests.post(
-            GEMINI_TTS_API_URL, 
-            headers={'Content-Type': 'application/json'}, 
-            data=json.dumps(payload)
-        )
-        response.raise_for_status()
-        result = response.json()
-        
-        candidate = result.get('candidates', [{}])[0]
-        
-        # 1. Extract the text response (what the AI actually said)
-        text_part = candidate.get('content', {}).get('parts', [])[0]
-        tts_text = text_part.get('text', "")
-        
-        # 2. Extract the audio data
-        audio_part = candidate.get('content', {}).get('parts', [])[-1]
-        mime_type = audio_part.get('inlineData', {}).get('mimeType', "")
-        audio_data_base64 = audio_part.get('inlineData', {}).get('data', "")
-        
-        if not tts_text or not audio_data_base64 or not mime_type.startswith("audio/L16"):
-            st.error(f"Could not generate voice response. Details: Model returned insufficient data.")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                GEMINI_TTS_API_URL, 
+                headers={'Content-Type': 'application/json'}, 
+                data=json.dumps(payload)
+            )
+            
+            # Check for success
+            response.raise_for_status()
+            
+            # If successful, process and break the loop
+            result = response.json()
+            candidate = result.get('candidates', [{}])[0]
+            
+            # 1. Extract the text response (what the AI actually said)
+            text_part = candidate.get('content', {}).get('parts', [])[0]
+            tts_text = text_part.get('text', "")
+            
+            # 2. Extract the audio data
+            audio_part = candidate.get('content', {}).get('parts', [])[-1]
+            mime_type = audio_part.get('inlineData', {}).get('mimeType', "")
+            audio_data_base64 = audio_part.get('inlineData', {}).get('data', "")
+            
+            if not tts_text or not audio_data_base64 or not mime_type.startswith("audio/L16"):
+                # Handle cases where the API returns a 200 but content is missing
+                st.error("Could not generate voice response: API returned insufficient data.")
+                return None, None
+                
+            # 3. Get sample rate from mimeType (e.g., audio/L16;rate=24000)
+            sample_rate_match = re.search(r'rate=(\d+)', mime_type)
+            sample_rate = int(sample_rate_match.group(1)) if sample_rate_match else 24000
+
+            # 4. Decode base64 to raw PCM bytes
+            pcm_data = base64.b64decode(audio_data_base64)
+
+            # 5. Convert PCM bytes to WAV format
+            wav_bytes = pcm_to_wav(pcm_data, sample_rate=sample_rate)
+            
+            return tts_text, wav_bytes
+
+        except requests.exceptions.RequestException as e:
+            # Check for recoverable errors (500, 503)
+            if response.status_code in [500, 503] and attempt < max_retries - 1:
+                wait_time = 2 ** (attempt + 1)
+                st.warning(f"TTS API Error {response.status_code}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue # Go to the next attempt
+            
+            # If it's a non-recoverable error (e.g., 400) or last attempt failed
+            error_message = f"TTS API Request Failed after {attempt + 1} attempts. Last status: {response.status_code}. Error: {e}"
+            st.error(f"ERROR: Could not generate voice response. Details: {error_message}")
             return None, None
             
-        # 3. Get sample rate from mimeType (e.g., audio/L16;rate=24000)
-        sample_rate_match = re.search(r'rate=(\d+)', mime_type)
-        sample_rate = int(sample_rate_match.group(1)) if sample_rate_match else 24000
-
-        # 4. Decode base64 to raw PCM bytes
-        pcm_data = base64.b64decode(audio_data_base64)
-
-        # 5. Convert PCM bytes to WAV format
-        wav_bytes = pcm_to_wav(pcm_data, sample_rate=sample_rate)
+        except Exception as e:
+            st.error(f"ERROR: An unexpected error occurred during TTS processing: {e}")
+            return None, None
             
-        return tts_text, wav_bytes
-
-    except requests.exceptions.RequestException as e:
-        # Check for non-standard API response errors
-        if response.status_code == 400:
-             error_message = f"TTS API Error 400. This might be due to the prompt itself (e.g., content policy violation or unsupported characters). Response: {response.text}"
-        else:
-            error_message = f"TTS API Request Failed: {e}"
-            
-        st.error(f"ERROR: Could not generate voice response. Details: {error_message}")
-        return None, None
-    except Exception as e:
-        st.error(f"ERROR: An unexpected error occurred during TTS processing: {e}")
-        return None, None
+    return None, None # Should be caught by the loop, but for completeness
 
 # --- 7. UI Components ---
 
