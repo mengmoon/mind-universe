@@ -97,9 +97,13 @@ db = initialize_firebase(firebaseConfig)
 
 # Get current user ID (using Streamlit's experimental user feature for simplicity)
 if 'user_id' not in st.session_state:
-    # Use Streamlit user's email if available, otherwise a default anonymous ID
-    st.session_state.user_id = st.experimental_user.id if st.experimental_user.id else "anonymous_user"
-    st.session_state.user_email = st.experimental_user.email if st.experimental_user.email else "Anonymous"
+    # Safely retrieve user attributes using getattr to prevent AttributeError
+    user_id = getattr(st.experimental_user, 'id', None)
+    user_email = getattr(st.experimental_user, 'email', None)
+
+    # Use retrieved attributes or fall back to anonymous defaults
+    st.session_state.user_id = user_id if user_id else "anonymous_user"
+    st.session_state.user_email = user_email if user_email else "Anonymous"
 
 # --- 3. Firestore Data Path Configuration ---
 
