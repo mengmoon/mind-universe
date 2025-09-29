@@ -480,24 +480,26 @@ def display_main_app():
             
     # --- CRITICAL FIX: Process goal actions by checking session state keys ---
     # This must run BEFORE the UI renders to avoid the component key conflict
-    for goal in st.session_state.goals:
+    goals_to_process = list(st.session_state.goals) # Process a snapshot
+
+    for goal in goals_to_process:
         goal_id = goal['id']
         
-        # 1. Check for ACHIEVE Button Click
-        achieve_key = f"achieve_goal_{goal_id}"
-        if st.session_state.get(achieve_key, False):
-            # Reset the session state key immediately to prevent re-triggering
-            st.session_state[achieve_key] = False 
-            update_goal_status_worker(goal_id, 'Achieved')
-            st.rerun() # Must rerun after state change for clean render
-
-        # 2. Check for DELETE Button Click
-        delete_key = f"delete_goal_{goal_id}"
-        if st.session_state.get(delete_key, False):
-            # Reset the session state key immediately
-            st.session_state[delete_key] = False
-            delete_goal_worker(goal_id)
-            st.rerun() # Must rerun after state change for clean render
+        # 1. Check for ACHIEVE Button Click (Only visible for Active goals)
+        if goal.get('status') == 'Active':
+            achieve_key = f"achieve_goal_{goal_id}"
+            if st.session_state.get(achieve_key, False):
+                st.session_state[achieve_key] = False 
+                update_goal_status_worker(goal_id, 'Achieved')
+                st.rerun() 
+        
+        # 2. Check for DELETE Button Click (Only visible for Achieved goals)
+        elif goal.get('status') == 'Achieved':
+            delete_key = f"delete_goal_{goal_id}"
+            if st.session_state.get(delete_key, False):
+                st.session_state[delete_key] = False
+                delete_goal_worker(goal_id)
+                st.rerun() 
     
     # --- Header ---
     st.title("🌌 Mind Universe")
@@ -792,46 +794,52 @@ def display_main_app():
 
         # Active Goals
         st.subheader(f"🚀 Active Goals ({len(active_goals)})")
-        if active_goals:
-            for goal in active_goals:
-                with st.container(border=True):
-                    col_title, col_button = st.columns([4, 1])
-                    with col_title:
-                        st.markdown(f"**{goal.get('title')}**")
-                        created_at_dt = datetime.fromtimestamp(goal.get('created_at', datetime.now().timestamp()))
-                        st.caption(f"Started: {created_at_dt.strftime('%Y-%m-%d')}")
-                        if goal.get('description'):
-                            st.markdown(f"> *{goal.get('description')}*")
-                    with col_button:
-                        # Use the goal ID directly as the key. Streamlit sets st.session_state[key] = True on click.
-                        st.button(
-                            "Mark Achieved 🎉", 
-                            key=f"achieve_goal_{goal['id']}", 
-                            type="success"
-                        )
-        else:
-            st.info("You currently have no active goals. Time to set one!")
+        
+        # --- CRITICAL FIX: Wrap in container with length-based key for stability ---
+        with st.container(key=f"active_goals_container_{len(active_goals)}"):
+            if active_goals:
+                for goal in active_goals:
+                    with st.container(border=True):
+                        col_title, col_button = st.columns([4, 1])
+                        with col_title:
+                            st.markdown(f"**{goal.get('title')}**")
+                            created_at_dt = datetime.fromtimestamp(goal.get('created_at', datetime.now().timestamp()))
+                            st.caption(f"Started: {created_at_dt.strftime('%Y-%m-%d')}")
+                            if goal.get('description'):
+                                st.markdown(f"> *{goal.get('description')}*")
+                        with col_button:
+                            # Use the goal ID directly as the key. Checked at the top of display_main_app.
+                            st.button(
+                                "Mark Achieved 🎉", 
+                                key=f"achieve_goal_{goal['id']}", 
+                                type="success"
+                            )
+            else:
+                st.info("You currently have no active goals. Time to set one!")
 
         st.divider()
 
         # Achieved Goals
         st.subheader(f"✅ Achieved Goals ({len(achieved_goals)})")
-        if achieved_goals:
-            st.balloons() # Celebrate achievements!
-            for goal in achieved_goals:
-                with st.container(border=True):
-                    col_achieved, col_delete = st.columns([5, 1])
-                    with col_achieved:
-                        st.markdown(f"**{goal.get('title')}** (Achieved)")
-                    with col_delete:
-                        # Use the goal ID directly as the key. Streamlit sets st.session_state[key] = True on click.
-                        st.button(
-                            "Delete", 
-                            key=f"delete_goal_{goal['id']}", 
-                            type="secondary"
-                        )
-        else:
-            st.info("Keep working! Achieved goals will appear here.")
+        
+        # --- CRITICAL FIX: Wrap in container with length-based key for stability ---
+        with st.container(key=f"achieved_goals_container_{len(achieved_goals)}"):
+            if achieved_goals:
+                st.balloons() # Celebrate achievements!
+                for goal in achieved_goals:
+                    with st.container(border=True):
+                        col_achieved, col_delete = st.columns([5, 1])
+                        with col_achieved:
+                            st.markdown(f"**{goal.get('title')}** (Achieved)")
+                        with col_delete:
+                            # Use the goal ID directly as the key. Checked at the top of display_main_app.
+                            st.button(
+                                "Delete", 
+                                key=f"delete_goal_{goal['id']}", 
+                                type="secondary"
+                            )
+            else:
+                st.info("Keep working! Achieved goals will appear here.")
 
 
 # --- Main Application Logic ---
