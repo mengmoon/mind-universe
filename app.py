@@ -10,6 +10,98 @@ from datetime import datetime
 import hashlib
 import time
 
+# --- Streamlit Page Configuration ---
+# Must be the first Streamlit command
+st.set_page_config(
+    page_title="Mind Universe",
+    page_icon="🌌",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- Custom CSS for Styling ---
+def inject_custom_css():
+    """Injects custom CSS for theme, fonts, and layout enhancements."""
+    st.markdown("""
+        <style>
+        /* General Theme & Typography */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        
+        html, body, [class*="stApp"] {
+            font-family: 'Inter', sans-serif;
+            color: #333333; /* Darker text for readability */
+        }
+        
+        /* Subtle Background Gradient for a "Universe" feel */
+        .stApp {
+            background-color: #F8F9FA; /* Light gray base */
+            background-image: linear-gradient(135deg, #F8F9FA 0%, #E9ECEF 100%);
+        }
+
+        /* Titles and Headers */
+        h1 {
+            color: #4A90E2; /* Primary blue for key titles */
+            font-weight: 700;
+        }
+        h2, h3 {
+            color: #3C6382;
+        }
+
+        /* Sidebar Styling */
+        .st-emotion-cache-1cypcdb { /* Targets the sidebar content container */
+            background-color: #FFFFFF;
+            border-right: 1px solid #DEE2E6;
+        }
+        
+        /* Goal List Styling */
+        .goal-item {
+            padding: 8px;
+            margin-bottom: 5px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            border: 1px solid #E9ECEF;
+            transition: all 0.2s ease;
+        }
+        .goal-item:hover {
+            background-color: #F8F9FA;
+            border-color: #DDEBF0;
+        }
+        .goal-completed {
+            background-color: #E6F7E6; /* Light green for completed */
+            color: #28A745;
+            opacity: 0.8;
+        }
+
+        /* Center Content on Auth Page (using columns and margin) */
+        .auth-container {
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        /* Chat/Message Box Styling */
+        .stChatMessage {
+            border-radius: 12px;
+            padding: 10px;
+            margin: 5px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        
+        /* Buttons */
+        .stButton>button {
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+# Call the CSS injector early
+inject_custom_css()
+
 # --- 1. Global Configuration and Secrets Loading ---
 try:
     firebase_config_str = st.secrets["FIREBASE_CONFIG"]
@@ -407,33 +499,43 @@ def generate_export_content():
 # --- 7. UI Rendering Functions ---
 
 def display_auth_page():
-    """Displays the login and sign up forms."""
-    st.title("🌌 Welcome to Mind Universe")
-    st.subheader("Securely access your personal wellness space.")
-    tab_login, tab_signup = st.tabs(["🔒 Login", "📝 Sign Up"])
-    with tab_login:
-        st.markdown("Enter your credentials to log in.")
-        with st.form("login_form"):
-            login_email = st.text_input("Email (Login)").lower()
-            login_password = st.text_input("Password (Login)", type="password")
-            login_submitted = st.form_submit_button("Login", type="primary")
-            if login_submitted and login_email and login_password:
-                login_user(login_email, login_password)
-                if st.session_state.logged_in:
-                    st.rerun()
-            elif login_submitted:
-                st.warning("Please enter both email and password.")
-    with tab_signup:
-        st.markdown("Create a new account.")
-        with st.form("signup_form"):
-            signup_email = st.text_input("Email (Sign Up)").lower()
-            signup_password = st.text_input("Password (Sign Up)", type="password")
-            signup_submitted = st.form_submit_button("Sign Up", type="secondary")
-            if signup_submitted and signup_email and signup_password:
-                if sign_up(signup_email, signup_password):
-                    st.rerun()
-            elif signup_submitted:
-                st.warning("Please enter a valid email and password (min 6 characters).")
+    """Displays the login and sign up forms with improved styling."""
+    
+    # Use columns to center the content
+    col_l, col_center, col_r = st.columns([1, 2, 1])
+    
+    with col_center:
+        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+        st.title("🌌 Welcome to Mind Universe")
+        st.subheader("Securely access your personal wellness space.")
+        st.markdown("---")
+        
+        tab_login, tab_signup = st.tabs(["🔒 Login", "📝 Sign Up"])
+        with tab_login:
+            st.markdown("Enter your credentials to log in.")
+            with st.form("login_form"):
+                login_email = st.text_input("Email (Login)").lower()
+                login_password = st.text_input("Password (Login)", type="password")
+                login_submitted = st.form_submit_button("Login", type="primary")
+                if login_submitted and login_email and login_password:
+                    login_user(login_email, login_password)
+                    if st.session_state.logged_in:
+                        st.rerun()
+                elif login_submitted:
+                    st.warning("Please enter both email and password.")
+        with tab_signup:
+            st.markdown("Create a new account.")
+            with st.form("signup_form"):
+                signup_email = st.text_input("Email (Sign Up)").lower()
+                signup_password = st.text_input("Password (Sign Up)", type="password")
+                signup_submitted = st.form_submit_button("Sign Up", type="secondary")
+                if signup_submitted and signup_email and signup_password:
+                    if sign_up(signup_email, signup_password):
+                        st.rerun()
+                elif signup_submitted:
+                    st.warning("Please enter a valid email and password (min 6 characters).")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def display_main_app():
     """Renders the main application UI after authentication."""
@@ -447,7 +549,7 @@ def display_main_app():
             st.session_state.user_data_loaded = True
 
     st.title("🌌 Mind Universe")
-    st.caption(f"Welcome, {st.session_state.current_user_email} (ID: {st.session_state.current_user_email})")
+    st.caption(f"Welcome, **{st.session_state.current_user_email}**")
 
     # --- Sidebar ---
     with st.sidebar:
@@ -456,9 +558,62 @@ def display_main_app():
             logout()
         st.divider()
         
+        # --- Goal Setting ---
+        st.subheader("🎯 Goal Setting")
+        with st.form("goal_form", clear_on_submit=True):
+            goal_text = st.text_input("Set a new goal", placeholder="e.g., Meditate for 10 minutes daily")
+            deadline = st.date_input("Deadline (optional)", value=None)
+            if st.form_submit_button("Add Goal", type="primary"):
+                if goal_text:
+                    save_goal(st.session_state.current_user_email, goal_text, deadline)
+                    st.rerun()
+                else:
+                    st.warning("Please enter a goal.")
+        
+        st.subheader("Your Goals")
+        if st.session_state.goals:
+            for goal in st.session_state.goals:
+                is_completed = goal["completed"]
+                status_icon = "✅" if is_completed else "⏳"
+                style_class = "goal-item goal-completed" if is_completed else "goal-item"
+
+                # Use markdown with HTML for styling goals compactly
+                st.markdown(
+                    f'<div class="{style_class}">',
+                    unsafe_allow_html=True
+                )
+                
+                col_check, col_text = st.columns([0.8, 4])
+                
+                with col_check:
+                    # Checkbox for status update
+                    completed = st.checkbox(
+                        "", 
+                        value=is_completed, 
+                        key=f"goal_check_{goal['id']}", 
+                        label_visibility="hidden"
+                    )
+                    if completed != is_completed:
+                        update_goal_status(st.session_state.current_user_email, goal["id"], completed)
+                        st.rerun() # Rerun to re-render the list with updated styling
+
+                with col_text:
+                    text_style = "text-decoration: line-through; color: #666;" if is_completed else ""
+                    st.markdown(
+                        f'<p style="{text_style}; margin: 0;">{status_icon} **{goal["text"]}** <br> <span style="font-size: 0.8em; color: #888;">Due: {goal.get("deadline", "None")}</span></p>', 
+                        unsafe_allow_html=True
+                    )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        else:
+            st.info("No goals set yet. Set your first goal above!")
+            
+        st.divider()
+
         st.subheader("Data Management")
         st.download_button(
-            label="Download History (TXT)",
+            label="Download All Data (.txt)",
             data=generate_export_content(),
             file_name=f"mind_universe_export_{datetime.now().strftime('%Y%m%d')}.txt",
             mime="text/plain"
@@ -466,14 +621,14 @@ def display_main_app():
         
         # --- Clear History ---
         st.subheader("⚠️ Clear History")
-        if st.button("Clear All History", help="Permanently deletes all data."):
+        if st.button("Clear All Data", help="Permanently deletes all data."):
             st.session_state.confirm_delete = True
         
         if st.session_state.confirm_delete:
             st.warning("Are you sure you want to PERMANENTLY delete ALL data?")
             col_yes, col_no = st.columns(2)
             with col_yes:
-                if st.button("Yes, Delete All Data"):
+                if st.button("Yes, Delete All Data", key="confirm_delete_yes"):
                     with st.spinner("Deleting data..."):
                         try:
                             # Delete collections
@@ -492,39 +647,9 @@ def display_main_app():
                             st.error(f"Deletion failed: {e}")
                             st.session_state.confirm_delete = False
             with col_no:
-                if st.button("No, Cancel"):
+                if st.button("No, Cancel", key="confirm_delete_no"):
                     st.session_state.confirm_delete = False
                     st.rerun()
-        
-        # --- Goal Setting ---
-        st.subheader("Goal Setting")
-        with st.form("goal_form", clear_on_submit=True):
-            goal_text = st.text_input("Set a new goal")
-            deadline = st.date_input("Deadline (optional)", value=None)
-            if st.form_submit_button("Add Goal"):
-                if goal_text:
-                    save_goal(st.session_state.current_user_email, goal_text, deadline)
-                    st.rerun()
-                else:
-                    st.warning("Please enter a goal.")
-        
-        st.subheader("Your Goals")
-        if st.session_state.goals:
-            for goal in st.session_state.goals:
-                col1, col2 = st.columns([3, 1])
-                is_completed = goal["completed"]
-                text_style = "text-decoration: line-through; color: #888;" if is_completed else ""
-
-                with col1:
-                    st.markdown(f'<p style="{text_style}">**{goal["text"]}** (Due: {goal.get("deadline", "None")})</p>', unsafe_allow_html=True)
-                with col2:
-                    # Use a unique key for the checkbox tied to goal ID
-                    completed = st.checkbox("Done", value=is_completed, key=f"goal_check_{goal['id']}")
-                    if completed != is_completed:
-                        update_goal_status(st.session_state.current_user_email, goal["id"], completed)
-                        st.rerun() # Rerun to re-render the list with updated styling
-        else:
-            st.info("No goals set yet.")
 
 
     # --- Navigation ---
@@ -533,7 +658,7 @@ def display_main_app():
     if selected_view != st.session_state.current_tab:
         st.session_state.current_tab = selected_view
         st.rerun()
-    st.divider()
+    st.markdown("---") # Visual separator
 
     # --- Wellness Journal Tab ---
     if st.session_state.current_tab == "✍️ Wellness Journal":
@@ -542,11 +667,11 @@ def display_main_app():
         
         col_prompt, col_empty = st.columns([1, 4])
         with col_prompt:
-            if st.button("Get a Journal Prompt", help="Generate a new idea for your entry."):
+            if st.button("✨ Get a Prompt", help="Generate a new idea for your entry."):
                 st.session_state.daily_prompt = generate_journal_prompt()
         
         if st.session_state.daily_prompt:
-            st.info(f"**Prompt**: {st.session_state.daily_prompt}")
+            st.info(f"**Today's Reflection**: {st.session_state.daily_prompt}")
         
         with st.form("journal_form", clear_on_submit=True):
             col1, col2 = st.columns([1, 3])
@@ -571,7 +696,7 @@ def display_main_app():
         st.divider()
         
         # --- Journal History ---
-        st.subheader("Journal History")
+        st.subheader("📖 Journal History")
         if st.session_state.journal_entries:
             for entry in st.session_state.journal_entries:
                 with st.expander(f"**{entry.get('date')}** — {entry.get('title', 'Untitled Entry')} — Mood: {entry.get('mood', 'N/A')}"):
@@ -587,7 +712,7 @@ def display_main_app():
             st.info("No journal entries found. Start writing above!")
             
         # --- Mood Trends Chart ---
-        st.subheader("Mood Trends")
+        st.subheader("📈 Mood Trends")
         if st.session_state.journal_entries:
             # Mood mapping for chart scoring (higher is generally better)
             mood_scores = {"Happy": 5, "Excited": 4, "Calm": 3, "Anxious": 2, "Stressed": 1, "Sad": 0}
@@ -614,10 +739,11 @@ def display_main_app():
                 # Set date as index for chronological charting
                 df = df.set_index("Date") 
                 
-                st.line_chart(df, y="Mood Score", color="#4CAF50")
+                # Updated color for better aesthetic
+                st.line_chart(df, y="Mood Score", color="#6A0DAD")
                 
                 # Show key for scores
-                st.markdown("Mood Score Key: 5=Happy, 3=Calm, 0=Sad")
+                st.markdown("Mood Score Key: **5=Happy**, **3=Calm**, **0=Sad**")
             else:
                 st.info("Not enough data points to display mood trends.")
         else:
@@ -630,7 +756,7 @@ def display_main_app():
         
         # Mentor Persona Selector
         st.selectbox(
-            "Choose Mentor Persona (This updates the AI's guidance style)", 
+            "Select AI Mentor Persona", 
             ["Default", "Freud", "Adler", "Jung", "Maslow", "Positive Psychology", "CBT"], 
             key="mentor_persona",
             help="Selecting a persona will influence the advice given by the AI Mentor."
@@ -639,6 +765,7 @@ def display_main_app():
         st.divider()
         
         # Display chat history
+        # Reverse the list for display so the latest message is at the bottom of the visible area
         for message in st.session_state.chat_history:
             role = "user" if message["role"] == "user" else "assistant"
             avatar = "👤" if role == "user" else "🧠"
