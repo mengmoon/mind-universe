@@ -7,19 +7,11 @@ from utils import (
     logout, 
     get_user_chat_collection_ref, 
     get_user_journal_collection_ref, 
-    get_user_goals_collection_ref
+    get_user_goals_collection_ref,
+    # Additional utilities needed for AI Mentor page
+    save_chat_message,
+    generate_chat_response # Retaining the correct function name from utils import
 )
-
-# NOTE: For manual routing, you MUST import the functions from your page files.
-# Since I cannot see your 'pages/' directory, these are placeholders.
-# You must ensure these modules (or functions) are importable where app.py is run.
-# For example, if your 'pages/1_AI_Mentor.py' has an 'app()' function, you'd import it.
-
-# Assuming the following functions exist in the pages/ directory and can be imported:
-# from pages.1_AI_Mentor import app as ai_mentor_app
-# from pages.2_Wellness_Journal import app as journal_app
-# from pages.3_Insights import app as insights_app
-# from pages.4_Goal_Tracker import app as goals_app
 
 # --- Global Page Configuration ---
 st.set_page_config(layout="wide", page_title="Mind Universe: Wellness & AI")
@@ -204,9 +196,7 @@ def display_sidebar():
                     st.info("Deletion cancelled.")
                     st.rerun()
 
-# --- Placeholder Functions for Manual Routing ---
-# In a real setup, you would replace these with actual imports/function calls 
-# from your pages/ directory. Since I cannot, I use placeholders.
+# --- Page Content Functions ---
 
 def display_dashboard():
     """Displays the main landing page content."""
@@ -234,6 +224,76 @@ def display_dashboard():
         st.error("### 🎯 Goal Tracker")
         st.markdown("Set and monitor your personal wellness objectives. Easily mark goals as achieved and track your progress.")
 
+# --- AI Mentor Page Logic (Replacing pages/1_AI_Mentor.py) ---
+
+def ai_mentor_app():
+    if not st.session_state.logged_in:
+        st.warning("Please log in via the Dashboard to use the AI Mentor.")
+        return
+
+    st.header("💬 AI Mentor")
+    st.caption("Your private, non-judgmental guide. Talk about your day, feelings, or seek coping strategies.")
+
+    # --- Chat Display Area ---
+    # Display messages using st.chat_message
+    for message in st.session_state.chat_history:
+        role = "user" if message["role"] == "user" else "assistant"
+        avatar = "👤" if role == "user" else "🧠"
+        
+        with st.chat_message(role, avatar=avatar):
+            st.markdown(message["content"])
+
+    # --- Chat Input and Handler ---
+    if prompt := st.chat_input("Type your message to Mind Mentor..."):
+        
+        # 1. Prepare and save user message
+        user_message_dict = {
+            "role": "user",
+            "content": prompt,
+            "timestamp": datetime.now().timestamp()
+        }
+        st.session_state.chat_history.append(user_message_dict)
+        save_chat_message(user_message_dict) # Save to Firestore
+
+        # Display user message immediately
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
+
+        # 2. Get AI response
+        with st.chat_message("assistant", avatar="🧠"):
+            with st.spinner("Mind Mentor is reflecting..."):
+                
+                # Prepare history for the LLM call
+                llm_history = [
+                    {"role": "user", "text": msg["content"]} 
+                    if msg["role"] == "user" else 
+                    {"role": "model", "text": msg["content"]} 
+                    for msg in st.session_state.chat_history
+                ]
+                
+                # Use the imported generate_chat_response function
+                ai_response_text = generate_chat_response(llm_history)
+                
+            if ai_response_text:
+                st.markdown(ai_response_text)
+                
+                # 3. Prepare and save AI message
+                ai_message_dict = {
+                    "role": "model",
+                    "content": ai_response_text,
+                    "timestamp": datetime.now().timestamp()
+                }
+                st.session_state.chat_history.append(ai_message_dict)
+                save_chat_message(ai_message_dict) # Save to Firestore
+                
+                # Rerun to ensure the full chat history is displayed correctly
+                st.rerun() 
+            else:
+                st.error("Failed to receive a reply from the AI Mentor. Please try again.")
+                # Remove the user message from state if AI failed to respond
+                st.session_state.chat_history.pop()
+
+
 # --- Main Logic ---
 
 if st.session_state.logged_in:
@@ -253,22 +313,16 @@ if st.session_state.logged_in:
     # 3. ROUTING LOGIC (Selects which page function to call)
     page = st.session_state.page_selected
     
-    # IMPORTANT: You must replace these st.error calls with the actual function call
-    # from your respective page files once you import them.
     if page == 'Dashboard':
         display_dashboard()
     elif page == '💬 AI Mentor':
-        st.error("Page Content Not Imported. Place the content of pages/1_AI_Mentor.py here or import the function.")
-        # ai_mentor_app() 
+        ai_mentor_app()
     elif page == '✍️ Wellness Journal':
-        st.error("Page Content Not Imported. Place the content of pages/2_Wellness_Journal.py here or import the function.")
-        # journal_app()
+        st.error("Wellness Journal Content Not Integrated. Copy the content of pages/2_Wellness_Journal.py into a new function here.")
     elif page == '📊 Insights':
-        st.error("Page Content Not Imported. Place the content of pages/3_Insights.py here or import the function.")
-        # insights_app()
+        st.error("Insights Content Not Integrated. Copy the content of pages/3_Insights.py into a new function here.")
     elif page == '🎯 Goal Tracker':
-        st.error("Page Content Not Imported. Place the content of pages/4_Goal_Tracker.py here or import the function.")
-        # goals_app()
+        st.error("Goal Tracker Content Not Integrated. Copy the content of pages/4_Goal_Tracker.py into a new function here.")
 
 else:
     display_auth_page()
