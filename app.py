@@ -171,6 +171,8 @@ if 'mentor_persona' not in st.session_state:
     st.session_state.mentor_persona = "Default"
 if 'confirm_delete' not in st.session_state:
     st.session_state.confirm_delete = False
+if 'overall_insights_text' not in st.session_state:
+    st.session_state.overall_insights_text = None
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -238,6 +240,7 @@ def logout():
     st.session_state.daily_prompt = None
     st.session_state.mentor_persona = "Default"
     st.session_state.confirm_delete = False
+    st.session_state.overall_insights_text = None
     st.info("You have been logged out.")
     st.rerun()
 
@@ -314,6 +317,8 @@ def save_journal_entry(date, title, content, mood):
         _, new_journal_data, _ = load_data_from_firestore(st.session_state.current_user_email)
         st.session_state.journal_entries = new_journal_data
         st.success("Journal entry saved!")
+        # Clear insights as data has changed
+        st.session_state.overall_insights_text = None 
     except Exception as e:
         st.error(f"Failed to save journal entry: {e}")
 
@@ -381,6 +386,55 @@ def analyze_journal_entry(content):
     except Exception as e:
         st.error(f"Error analyzing journal: {e}")
         return None
+
+def generate_overall_insights(journal_entries):
+    """Analyzes the last 10 journal entries for high-level themes and sentiment using Gemini."""
+    if not journal_entries:
+        return "No entries to analyze yet."
+
+    # Analyze the last 10 entries for a high-level summary
+    # NOTE: The list is sorted DESCENDING by timestamp, so [0:10] gives the 10 MOST RECENT entries.
+    recent_entries = journal_entries[:10] 
+    
+    combined_text = "\n---\n".join([
+        f"Date: {e.get('date', 'N/A')}, Mood: {e.get('mood', 'N/A')}. Content: {e.get('content', '')}" 
+        for e in recent_entries
+    ])
+
+    user_query = (
+        "Based on the following set of journal entries, provide a concise overall analysis (max 150 words). "
+        "Identify the top 3 recurring themes (e.g., work-life balance, creativity, anxiety), the dominant sentiment (e.g., 'generally positive with recent stress'), "
+        "and offer one forward-looking, actionable suggestion."
+        f"\n\nJOURNAL DATA:\n{combined_text}"
+    )
+
+    try:
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = requests.post(GEMINI_API_URL, headers={'Content-Type': 'application/json'}, data=json.dumps({
+                "contents": [{"role": "user", "parts": [{"text": user_query}]}],
+                "generationConfig": {"maxOutputTokens": 200, "temperature": 0.7}
+            }))
+            
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return f"API Error: {e.response.json().get('error', {}).get('message', str(e))}"
+            
+            result = response.json()
+            text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            
+            if text:
+                return text.strip()
+            else:
+                return "Analysis failed to generate content."
+        return "Failed to generate analysis after multiple retries."
+    except Exception as e:
+        return f"Unexpected error during analysis API call: {e}"
+
 
 def generate_ai_text_reply(user_prompt):
     """Handles the main chat generation with exponential backoff for retries."""
@@ -653,7 +707,8 @@ def display_main_app():
 
 
     # --- Navigation ---
-    view_options = ["✍️ Wellness Journal", "💬 AI Mentor"]
+    # ADDED "📊 Insights"
+    view_options = ["✍️ Wellness Journal", "💬 AI Mentor", "📊 Insights"]
     selected_view = st.radio("Navigation", view_options, index=view_options.index(st.session_state.current_tab), horizontal=True, label_visibility="hidden")
     if selected_view != st.session_state.current_tab:
         st.session_state.current_tab = selected_view
@@ -748,7 +803,7 @@ def display_main_app():
                 st.info("Not enough data points to display mood trends.")
         else:
             st.info("No mood data to display yet.")
-
+            
     # --- AI Mentor Tab ---
     elif st.session_state.current_tab == "💬 AI Mentor":
         st.header("Ask Your Mentor")
@@ -791,6 +846,85 @@ def display_main_app():
                     # 4. Save AI response and Rerun
                     save_chat_message("model", ai_response_text)
                     st.rerun()
+
+    # --- Insights Tab ---
+    elif st.session_state.current_tab == "📊 Insights":
+        st.header("Your Universe at a Glance")
+        st.caption("High-level summaries of your progress and personal trends.")
+        
+        # --- Goal Summary ---
+        st.subheader("🎯 Goal Progress Overview")
+        if st.session_state.goals:
+            total_goals = len(st.session_state.goals)
+            completed_goals = sum(1 for goal in st.session_state.goals if goal["completed"])
+            pending_goals = total_goals - completed_goals
+            
+            completion_rate = (completed_goals / total_goals) * 100 if total_goals > 0 else 0
+            
+            col_comp, col_pend, col_rate = st.columns(3)
+            
+            col_comp.metric("Completed Goals", completed_goals, help="Total goals marked as done.")
+            col_pend.metric("Pending Goals", pending_goals, help="Total goals still in progress.")
+            col_rate.metric("Completion Rate", f"{completion_rate:.1f}%", help="Percentage of goals completed.")
+            
+            st.progress(completion_rate / 100)
+            
+        else:
+            st.info("Set some goals in the sidebar to track your progress here!")
+
+        st.divider()
+
+        # --- AI-Driven Journal Analysis ---
+        st.subheader("🧠 Recent Journal Themes & Sentiment")
+        if st.session_state.journal_entries:
+            if st.button("Generate High-Level Analysis"):
+                with st.spinner("Analyzing recent entries..."):
+                    insights = generate_overall_insights(st.session_state.journal_entries)
+                    st.session_state.overall_insights_text = insights
+            
+            if st.session_state.get('overall_insights_text'):
+                st.info(st.session_state.overall_insights_text)
+            else:
+                st.info(f"Click **'Generate High-Level Analysis'** to view themes and sentiment from your {min(10, len(st.session_state.journal_entries))} most recent entries.")
+        else:
+            st.info("Write a few journal entries to unlock deep insights.")
+
+        st.divider()
+
+        # --- Mood Statistics ---
+        st.subheader("📊 Mood Score Statistics")
+        if st.session_state.journal_entries:
+            mood_scores = {"Happy": 5, "Excited": 4, "Calm": 3, "Anxious": 2, "Stressed": 1, "Sad": 0}
+            
+            chart_data_list = []
+            # We need to map mood scores for all entries, not just recent ones
+            for entry in st.session_state.journal_entries:
+                mood_label = entry.get("mood", "Calm")
+                score = mood_scores.get(mood_label, 3)
+                chart_data_list.append(score)
+            
+            if chart_data_list:
+                df_scores = pd.Series(chart_data_list)
+                
+                # Find the label corresponding to the min/max score
+                mood_labels_inv = {v: k for k, v in mood_scores.items()}
+                
+                # Since multiple moods might share the same score (e.g., Anxious/Stressed might be low), 
+                # we just show the score's label
+                min_score = df_scores.min()
+                max_score = df_scores.max()
+                
+                max_mood_label = mood_labels_inv.get(max_score, 'N/A')
+                min_mood_label = mood_labels_inv.get(min_score, 'N/A')
+                
+                col_max, col_min, col_avg = st.columns(3)
+                
+                col_max.metric("Highest Mood", f"{max_mood_label} ({max_score})")
+                col_min.metric("Lowest Mood", f"{min_mood_label} ({min_score})")
+                col_avg.metric("Average Score", f"{df_scores.mean():.2f}")
+            
+        else:
+            st.info("Mood statistics will appear once you log entries.")
 
 
 # --- Main Application Logic ---
