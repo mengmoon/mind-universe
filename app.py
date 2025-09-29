@@ -12,7 +12,7 @@ try:
     firebase_config_str = st.secrets["FIREBASE_CONFIG"]
     if isinstance(firebase_config_str, str):
         # Fix for escaped newlines in the private key string
-        firebase_config_str = firebase_config_str.replace('\\\\n', '\\n')
+        firebase_config_str = firebase_config_str.replace('\\\\n', '\\n').replace('\\n','\\n')
         firebase_config_str = firebase_config_str.strip().strip('"').strip("'")
         
     firebaseConfig = json.loads(firebase_config_str)
@@ -48,7 +48,7 @@ def initialize_firebase(config):
             "token_uri": config["token_uri"],
             "auth_provider_x509_cert_url": config["auth_provider_x509_cert_url"],
             "client_x509_cert_url": config["client_x509_cert_url"],
-            "universe_domain": config["universe_domain"],
+            "universe_domain": config.get("universe_domain", "") ,
         }
         
         if not firebase_admin._apps:
@@ -62,6 +62,9 @@ def initialize_firebase(config):
         st.error(f"Failed to initialize Firebase: {e}")
         st.stop()
         
+db = initialize_firebase(firebaseConfig)
+
+# Ensure db is initialized (move assignment after function to avoid surprising indentation)
 db = initialize_firebase(firebaseConfig)
 
 # --- 3. Authentication & State Management Functions ---
@@ -214,6 +217,8 @@ def save_chat_message(role, content):
     try:
         chat_ref = get_user_chat_collection_ref(st.session_state.current_user_email)
         chat_ref.add(message)
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
         st.session_state.chat_history.append(message)
     except Exception as e:
         st.error(f"Failed to save message: {e}")
@@ -279,10 +284,10 @@ def update_goal_status_worker(goal_id, new_status):
         for goal in st.session_state.goals:
             if goal.get('id') == goal_id:
                 goal['status'] = new_status
-                title = goal['title']
+                title = goal.get('title', 'Goal')
                 break
                 
-        st.toast(f"Goal '{title}' updated to {new_status}!", icon="🎉" if new_status == "Achieved" else "🎯")
+        st.success(f"Goal '{title}' updated to {new_status}!")
     except Exception as e:
         st.error(f"Failed to update goal status: {e}")
 
@@ -297,7 +302,7 @@ def delete_goal_worker(goal_id):
         # 2. Update Session State in place
         st.session_state.goals = [g for g in st.session_state.goals if g.get('id') != goal_id]
         
-        st.toast("Goal deleted successfully.", icon="🗑️")
+        st.success("Goal deleted successfully.")
     except Exception as e:
         st.error(f"Failed to delete goal: {e}")
 
@@ -331,12 +336,27 @@ def call_gemini_api(payload, is_json_response=False):
             response = requests.post(GEMINI_API_URL, headers=headers, data=json.dumps(payload))
             response.raise_for_status()
             result = response.json()
-            candidate = result.get('candidates', [{}])[0]
+            candidates = result.get('candidates', [])
+            if not candidates:
+                return None
+            candidate = candidates[0]
             
             if is_json_response:
                 json_text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
                 if json_text:
-                    return json.loads(json_text)
+                    # Clean up triple-backticks or other wrapping
+                    cleaned = json_text.strip()
+                    if cleaned.startswith('```') and cleaned.endswith('```'):
+                        cleaned = cleaned.strip('`')
+                    try:
+                        return json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        # fallback: try to extract json substring
+                        import re
+                        match = re.search(r"\{[\s\S]*\}", cleaned)
+                        if match:
+                            return json.loads(match.group(0))
+                        return None
                 return None
             else:
                 return candidate.get('content', {}).get('parts', [{}])[0].get('text')
@@ -442,7 +462,7 @@ def display_auth_page():
         with st.form("login_form"):
             login_email = st.text_input("Email (Login)").lower()
             login_password = st.text_input("Password (Login)", type="password")
-            login_submitted = st.form_submit_button("Login", type="primary")
+            login_submitted = st.form_submit_button("Login")
             
             if login_submitted:
                 if login_email and login_password:
@@ -457,7 +477,7 @@ def display_auth_page():
         with st.form("signup_form"):
             signup_email = st.text_input("Email (Sign Up)").lower()
             signup_password = st.text_input("Password (Sign Up)", type="password")
-            signup_submitted = st.form_submit_button("Sign Up", type="secondary")
+            signup_submitted = st.form_submit_button("Sign Up")
             
             if signup_submitted:
                 if signup_email and signup_password:
@@ -508,7 +528,7 @@ def display_main_app():
     # --- Sidebar (Data Management) ---
     with st.sidebar:
         st.header("Account & Data")
-        if st.button("Logout", type="secondary", help="End your session"):
+        if st.button("Logout", help="End your session"):
             logout()
             
         st.divider()
@@ -567,7 +587,7 @@ def display_main_app():
         # --- Clear History (Delete functionality) ---
         st.subheader("⚠️ Clear History")
         
-        if st.button("Clear All History (Requires Reload)", type="secondary", help="Permanently deletes all chat and journal data."):
+        if st.button("Clear All History (Requires Reload)", help="Permanently deletes all chat and journal data."):
             st.session_state.confirm_delete = True
             
         if st.session_state.get('confirm_delete', False):
@@ -675,7 +695,7 @@ def display_main_app():
             
             entry_content = st.text_area("What's on your mind today?", height=200, placeholder="Write freely about your day, challenges, or gratitude.")
             
-            submitted = st.form_submit_button("Save Entry", type="primary")
+            submitted = st.form_submit_button("Save Entry")
             
             if submitted and entry_content:
                 save_journal_entry(entry_date.strftime('%Y-%m-%d'), entry_title, entry_content)
@@ -727,7 +747,7 @@ def display_main_app():
             if chart_data:
                 st.markdown("**(Range: -1.0 Negative to 1.0 Positive)**")
                 # Ensure the y-axis is fixed for better comparison
-                st.line_chart(df[['sentiment']], height=300, y_min=-1.0, y_max=1.0)
+                st.line_chart(df[['sentiment']], height=300)
             else:
                 st.warning("No entries with sentiment data found. Save new journal entries to chart your trend.")
 
@@ -756,7 +776,7 @@ def display_main_app():
                 journal_text_block += f"=== Entry {i+1} ({entry.get('date', 'N/A')}): {entry.get('title', 'No Title')} ===\n"
                 journal_text_block += f"{entry.get('content', '')}\n\n"
             
-            if st.button(f"Generate Summary from Last {len(entries_to_analyze)} Entries", type="primary"):
+            if st.button(f"Generate Summary from Last {len(entries_to_analyze)} Entries"):
                 st.session_state.journal_analysis = None 
                 with st.spinner("Mind Analyst is reading your reflections..."):
                     analysis_result = generate_journal_analysis(journal_text_block)
@@ -778,7 +798,7 @@ def display_main_app():
             with st.form("goal_form", clear_on_submit=True):
                 goal_title = st.text_input("Goal Title (e.g., Meditate daily for 15 mins)")
                 goal_description = st.text_area("Detailed Plan/Description")
-                submitted = st.form_submit_button("Set Goal", type="primary")
+                submitted = st.form_submit_button("Set Goal")
 
                 if submitted and goal_title:
                     save_new_goal(goal_title, goal_description)
@@ -795,11 +815,11 @@ def display_main_app():
         # Active Goals
         st.subheader(f"🚀 Active Goals ({len(active_goals)})")
         
-        # --- CRITICAL FIX: Wrap in container with length-based key for stability ---
-        with st.container(key=f"active_goals_container_{len(active_goals)}"):
+        # Use a simple container (no unsupported args)
+        with st.container():
             if active_goals:
                 for goal in active_goals:
-                    with st.container(border=True):
+                    with st.container():
                         col_title, col_button = st.columns([4, 1])
                         with col_title:
                             st.markdown(f"**{goal.get('title')}**")
@@ -811,8 +831,7 @@ def display_main_app():
                             # Use the goal ID directly as the key. Checked at the top of display_main_app.
                             st.button(
                                 "Mark Achieved 🎉", 
-                                key=f"achieve_goal_{goal['id']}", 
-                                type="success"
+                                key=f"achieve_goal_{goal['id']}"
                             )
             else:
                 st.info("You currently have no active goals. Time to set one!")
@@ -822,21 +841,19 @@ def display_main_app():
         # Achieved Goals
         st.subheader(f"✅ Achieved Goals ({len(achieved_goals)})")
         
-        # --- CRITICAL FIX: Wrap in container with length-based key for stability ---
-        with st.container(key=f"achieved_goals_container_{len(achieved_goals)}"):
+        with st.container():
             if achieved_goals:
                 st.balloons() # Celebrate achievements!
                 for goal in achieved_goals:
-                    with st.container(border=True):
+                    with st.container():
                         col_achieved, col_delete = st.columns([5, 1])
                         with col_achieved:
                             st.markdown(f"**{goal.get('title')}** (Achieved)")
                         with col_delete:
-                            # Use the goal ID directly as the key. Checked at the top of display_main_app.
+                            # The button now only sets the session_state key when clicked
                             st.button(
                                 "Delete", 
-                                key=f"delete_goal_{goal['id']}", 
-                                type="secondary"
+                                key=f"delete_goal_{goal['id']}"
                             )
             else:
                 st.info("Keep working! Achieved goals will appear here.")
