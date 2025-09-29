@@ -77,7 +77,7 @@ if 'current_tab' not in st.session_state:
 if 'journal_analysis' not in st.session_state:
     st.session_state.journal_analysis = None
 if 'goals' not in st.session_state:
-    st.session_state.goals = [] # New state for goals
+    st.session_state.goals = [] 
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -173,7 +173,6 @@ def get_user_journal_collection_ref(user_id):
 def get_user_goals_collection_ref(user_id):
     """Returns the Firestore reference for the user's goals."""
     app_id = firebaseConfig["project_id"]
-    # New private collection for goals
     return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('goals')
 
 def load_data_from_firestore(user_id):
@@ -192,7 +191,7 @@ def load_data_from_firestore(user_id):
         journal_data = [doc.to_dict() for doc in journal_docs]
         journal_data.sort(key=lambda x: datetime.strptime(x.get('date', '1970-01-01'), '%Y-%m-%d'), reverse=True) 
         
-        # Load Goals (New)
+        # Load Goals
         goals_ref = get_user_goals_collection_ref(user_id)
         goals_docs = goals_ref.stream()
         # Include doc.id to enable updates/deletes
@@ -272,7 +271,7 @@ def update_goal_status(goal_id, new_status):
         
         # Only update status
         goal_doc_ref.update({"status": new_status})
-        st.success(f"Goal '{goal_id}' status updated to {new_status}!")
+        st.success(f"Goal status updated to {new_status}!")
         
         # Force reload goals
         _, _, new_goals_data = load_data_from_firestore(st.session_state.current_user_email)
@@ -431,7 +430,34 @@ def display_auth_page():
     
     tab_login, tab_signup = st.tabs(["🔒 Login", "📝 Sign Up"])
     
-    # ... (Login and Sign Up forms remain the same) ...
+    with tab_login:
+        st.markdown("Enter your credentials to log in.")
+        with st.form("login_form"):
+            login_email = st.text_input("Email (Login)").lower()
+            login_password = st.text_input("Password (Login)", type="password")
+            login_submitted = st.form_submit_button("Login", type="primary")
+            
+            if login_submitted:
+                if login_email and login_password:
+                    login_user(login_email, login_password)
+                    if st.session_state.logged_in:
+                        st.rerun()
+                else:
+                    st.warning("Please enter both email and password.")
+                    
+    with tab_signup:
+        st.markdown("Create a new account.")
+        with st.form("signup_form"):
+            signup_email = st.text_input("Email (Sign Up)").lower()
+            signup_password = st.text_input("Password (Sign Up)", type="password")
+            signup_submitted = st.form_submit_button("Sign Up", type="secondary")
+            
+            if signup_submitted:
+                if signup_email and signup_password:
+                    if sign_up(signup_email, signup_password):
+                        st.rerun()
+                else:
+                    st.warning("Please enter a valid email and a password (min 6 characters).")
 
 def display_main_app():
     """Displays the main application content after successful login."""
@@ -508,8 +534,52 @@ def display_main_app():
             help="Downloads all journal entries, goals, and chat history into a single text file."
         )
         
-        # --- Clear History (Delete functionality remains the same) ---
-        # ... (Deletion logic remains the same) ...
+        # --- Clear History (Delete functionality) ---
+        st.subheader("⚠️ Clear History")
+        
+        if st.button("Clear All History (Requires Reload)", type="secondary", help="Permanently deletes all chat and journal data."):
+            st.session_state.confirm_delete = True
+            
+        if st.session_state.get('confirm_delete', False):
+            st.warning("Are you sure you want to PERMANENTLY delete ALL data?")
+            col_yes, col_no = st.columns(2)
+            
+            with col_yes:
+                if st.button("Yes, Delete All Data"):
+                    with st.spinner("Deleting data..."):
+                        try:
+                            # Delete Chat History
+                            chat_ref = get_user_chat_collection_ref(st.session_state.current_user_email)
+                            for doc in chat_ref.stream():
+                                doc.reference.delete()
+                            st.session_state.chat_history = []
+                            
+                            # Delete Journal Entries
+                            journal_ref = get_user_journal_collection_ref(st.session_state.current_user_email)
+                            for doc in journal_ref.stream():
+                                doc.reference.delete()
+                            st.session_state.journal_entries = []
+                            
+                            # Delete Goals
+                            goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
+                            for doc in goals_ref.stream():
+                                doc.reference.delete()
+                            st.session_state.goals = []
+
+                            st.success("All history has been permanently deleted. Reloading application...")
+                            st.session_state.confirm_delete = False
+                            st.session_state.user_data_loaded = False
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"Deletion failed: {e}")
+                            st.session_state.confirm_delete = False
+
+            with col_no:
+                if st.button("No, Cancel"):
+                    st.session_state.confirm_delete = False
+                    st.info("Deletion cancelled.")
+                    st.rerun()
 
     # --- Navigation (Updated with Goals) ---
     view_options = ["💬 AI Mentor", "✍️ Wellness Journal", "📊 Insights", "🎯 Goal Tracker"]
@@ -533,8 +603,6 @@ def display_main_app():
     if st.session_state.current_tab == "💬 AI Mentor":
         # Content 1: AI Mentor (Chat)
         st.header("Ask Your Mentor")
-        # ... (AI Mentor chat logic remains the same) ...
-        
         st.caption("Chat with your supportive AI mentor for insights, coping strategies, and reflections.")
         st.divider()
 
@@ -565,8 +633,6 @@ def display_main_app():
     elif st.session_state.current_tab == "✍️ Wellness Journal":
         # Content 2: Wellness Journal
         st.header("Reflect & Record")
-        # ... (Journaling logic remains the same) ...
-        
         st.caption("Your private space for logging thoughts, feelings, and progress.")
 
         # Entry Form
@@ -612,29 +678,30 @@ def display_main_app():
         # New Sub-Tabs for Visualization and Summary
         tab_trends, tab_frequency, tab_summary = st.tabs(["📉 Sentiment Trend", "📊 Emotion Frequency", "🧠 Deep Summary"])
 
-        # --- 3.1 Sentiment Trend Chart (Line Chart) ---
+        # --- 3.1 Data Preparation ---
+        chart_data = [
+            {'date': datetime.strptime(e['date'], '%Y-%m-%d'), 'sentiment': e.get('sentiment'), 'emotion': e.get('emotion')}
+            for e in st.session_state.journal_entries
+            if e.get('sentiment') is not None
+        ]
+        
+        if chart_data:
+            chart_data.sort(key=lambda x: x['date'])
+            df = pd.DataFrame(chart_data)
+            df.set_index('date', inplace=True)
+        
+        # --- 3.2 Sentiment Trend Chart (Line Chart) ---
         with tab_trends:
             st.subheader("Overall Emotional Score Over Time")
             
-            # Filter and prepare data
-            chart_data = [
-                {'date': datetime.strptime(e['date'], '%Y-%m-%d'), 'sentiment': e.get('sentiment'), 'emotion': e.get('emotion')}
-                for e in st.session_state.journal_entries
-                if e.get('sentiment') is not None
-            ]
-            
             if chart_data:
-                chart_data.sort(key=lambda x: x['date'])
-                df = pd.DataFrame(chart_data)
-                df.set_index('date', inplace=True)
-                
                 st.markdown("**(Range: -1.0 Negative to 1.0 Positive)**")
                 # Ensure the y-axis is fixed for better comparison
                 st.line_chart(df[['sentiment']], height=300, y_min=-1.0, y_max=1.0)
             else:
-                st.warning("No recent entries with sentiment data found. Save a new journal entry to start charting your trend.")
+                st.warning("No entries with sentiment data found. Save new journal entries to chart your trend.")
 
-        # --- 3.2 Emotion Frequency (Bar Chart - NEW) ---
+        # --- 3.3 Emotion Frequency (Bar Chart - NEW) ---
         with tab_frequency:
             st.subheader("Frequency of Detected Emotions")
             
@@ -649,7 +716,7 @@ def display_main_app():
                 st.info("Write more journal entries to generate this frequency chart.")
 
 
-        # --- 3.3 General Analysis Summary ---
+        # --- 3.4 General Analysis Summary ---
         with tab_summary:
             st.subheader("AI-Generated Journal Summary")
 
@@ -703,7 +770,8 @@ def display_main_app():
                     col_title, col_button = st.columns([4, 1])
                     with col_title:
                         st.markdown(f"**{goal.get('title')}**")
-                        st.caption(f"Started: {datetime.fromtimestamp(goal.get('created_at')).strftime('%Y-%m-%d')}")
+                        created_at_dt = datetime.fromtimestamp(goal.get('created_at', datetime.now().timestamp()))
+                        st.caption(f"Started: {created_at_dt.strftime('%Y-%m-%d')}")
                         if goal.get('description'):
                             st.markdown(f"> *{goal.get('description')}*")
                     with col_button:
