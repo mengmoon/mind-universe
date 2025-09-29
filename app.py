@@ -7,10 +7,9 @@ from utils import (
     load_data_from_firestore, 
     generate_chat_response, 
     save_chat_message,
-    render_wellness_journal_page, # <-- New import
-    # Keeping placeholders for future pages
-    # render_goals_tracker_page, 
-    # render_dashboard_page 
+    render_wellness_journal_page, 
+    render_goals_tracker_page, # <-- IMPORTED
+    render_insights_page,      # <-- IMPORTED
 )
 
 # --- Streamlit Configuration ---
@@ -26,7 +25,7 @@ if 'logged_in' not in st.session_state:
 if 'current_user_email' not in st.session_state:
     st.session_state.current_user_email = None
 if 'page_selected' not in st.session_state:
-    st.session_state.page_selected = 'Dashboard'
+    st.session_state.page_selected = 'Insights' # Default to Insights
 if 'user_data_loaded' not in st.session_state:
     st.session_state.user_data_loaded = False
 # Data containers (will be populated from Firestore)
@@ -52,10 +51,10 @@ def load_user_data():
             st.session_state.user_data_loaded = True
             st.success("Data loaded successfully!")
 
-# --- Page Rendering: Dashboard Placeholder ---
-# NOTE: This will be replaced with a proper dashboard function later.
-def render_dashboard_page():
-    st.title("🚀 Dashboard & Insights (Coming Soon!)")
+# --- Page Rendering: Insights Page (Renamed from Dashboard) ---
+def render_insights_page(): # Renamed from render_dashboard_page
+    """Renders the main Insights Dashboard page."""
+    st.title("📊 Insights Dashboard")
     st.markdown("---")
     st.info("Welcome to Mind Universe, your personalized AI wellness companion. Use the sidebar to chat with your Mind Mentor or write in your Journal.")
     
@@ -135,7 +134,8 @@ def render_auth_page():
     st.title("Welcome to Mind Universe")
     st.markdown("Your personal AI companion for mental wellness.")
     
-    st.image("https://placehold.co/600x200/5E548E/FFFFFF?text=Mind+Universe+Logo", use_column_width=True)
+    # RESOLVED: Changed deprecated use_column_width=True to use_container_width=True
+    st.image("https://placehold.co/600x200/5E548E/FFFFFF?text=Mind+Universe+Logo", use_container_width=True)
 
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
@@ -175,7 +175,8 @@ def render_authenticated_app():
     st.sidebar.markdown("---")
 
     # Navigation options
-    page_options = ['Dashboard', 'Chat', 'Journal', 'Goals (Coming Soon)']
+    # Updated: 'Dashboard' renamed to 'Insights', '(Coming Soon)' removed from 'Goals'
+    page_options = ['Insights', 'Chat', 'Journal', 'Goals']
     
     # Remove ' (Coming Soon)' for display but keep internal logic cleaner
     display_options = [p.split(' (')[0] for p in page_options]
@@ -188,20 +189,17 @@ def render_authenticated_app():
     st.sidebar.button("🔒 Logout", on_click=logout)
 
     # 3. Main Content Rendering
-    if st.session_state.page_selected == 'Dashboard':
-        render_dashboard_page()
+    if st.session_state.page_selected == 'Insights':
+        render_insights_page() # Calls the new Insights function
     elif st.session_state.page_selected == 'Chat':
         render_chat_page()
     elif st.session_state.page_selected == 'Journal':
-        # NEW PAGE INTEGRATION
         render_wellness_journal_page()
     elif st.session_state.page_selected == 'Goals':
-        st.title("🎯 Goals Tracker (Under Development)")
-        st.info("The Goals Tracker page will be ready soon!")
-        # render_goals_tracker_page() # Placeholder for future function
+        render_goals_tracker_page() # Calls the new Goals function
     else:
         # Fallback
-        render_dashboard_page()
+        render_insights_page()
 
 
 # --- Application Entry Point ---
