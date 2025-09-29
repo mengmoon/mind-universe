@@ -373,3 +373,140 @@ def analyze_journal_trends(journal_entries):
 
     # Limit to 30 most recent entries for a cleaner chart
     return mock_data[:30]
+
+def render_wellness_journal_page():
+    """Renders the Wellness Journal page layout, including forms for new entries and display of past entries."""
+    st.title("📖 Wellness Journal")
+    st.markdown("---")
+
+    current_email = st.session_state.current_user_email
+
+    # --- 1. Add New Entry Form ---
+    # The expander allows the journal form to be collapsed, keeping the page clean.
+    with st.expander("📝 Add a New Journal Entry", expanded=True):
+        with st.form(key='journal_form'):
+            entry_date = st.date_input("Date", datetime.now(), key="journal_date")
+            entry_title = st.text_input("Title", max_chars=100, placeholder="A summary of my day or topic...")
+            entry_content = st.text_area("What's on your mind?", height=200, placeholder="Start writing...")
+            
+            submitted = st.form_submit_button("Save Entry")
+
+            if submitted and entry_content.strip():
+                # Perform mock analysis before saving
+                analysis = analyze_journal_entry(entry_content)
+                
+                new_entry = {
+                    "date": entry_date.strftime('%Y-%m-%d'),
+                    "title": entry_title,
+                    "content": entry_content,
+                    "sentiment": analysis["sentiment"],
+                    "emotion": analysis["emotion"],
+                    "created_at": datetime.now().timestamp()
+                }
+
+                if save_journal_entry(new_entry):
+                    # Reload data to update the display immediately and trigger a rerun
+                    st.session_state.chat_history, st.session_state.journal_entries, st.session_state.goals = load_data_from_firestore(current_email)
+                    st.success("Journal entry saved and analyzed!")
+                    st.rerun()
+                else:
+                    st.error("Failed to save entry.")
+            elif submitted:
+                st.warning("Please write something in the journal content area.")
+
+    st.markdown("---")
+
+    # --- 2. Display Past Entries ---
+    st.subheader("Past Entries")
+
+    if not st.session_state.journal_entries:
+        st.info("You don't have any journal entries yet. Start by adding one above!")
+        # Return here to prevent the rest of the display/edit logic from running
+        return
+
+    # Render Edit Form First (uses a temporary state variable to trigger the form)
+    if 'editing_journal_id' in st.session_state and st.session_state.editing_journal_id:
+        entry_to_edit = next((e for e in st.session_state.journal_entries if e['id'] == st.session_state.editing_journal_id), None)
+
+        if entry_to_edit:
+            with st.form(key='edit_journal_form', clear_on_submit=False):
+                st.subheader(f"Editing Entry: {entry_to_edit.get('title', 'Untitled')}")
+                
+                # Convert string date back to datetime object for st.date_input
+                current_date = datetime.strptime(entry_to_edit['date'], '%Y-%m-%d')
+                
+                edited_date = st.date_input("Date", current_date, key="edited_date_val")
+                edited_title = st.text_input("Title", entry_to_edit['title'], key="edited_title_val")
+                edited_content = st.text_area("Content", entry_to_edit['content'], height=200, key="edited_content_val")
+                
+                col_save, col_cancel = st.columns([1, 1])
+                save_edit = col_save.form_submit_button("Save Changes")
+                cancel_edit = col_cancel.form_submit_button("Cancel")
+                
+                if save_edit and edited_content.strip():
+                    # Re-analyze content if it changed significantly (or just use mock analysis for now)
+                    analysis = analyze_journal_entry(edited_content)
+                        
+                    updated_data = {
+                        "date": edited_date.strftime('%Y-%m-%d'),
+                        "title": edited_title,
+                        "content": edited_content,
+                        "sentiment": analysis["sentiment"],
+                        "emotion": analysis["emotion"],
+                    }
+
+                    if update_journal_entry(entry_to_edit['id'], updated_data):
+                        # Clear editing state and reload data
+                        st.session_state.pop('editing_journal_id')
+                        st.session_state.chat_history, st.session_state.journal_entries, st.session_state.goals = load_data_from_firestore(current_email)
+                        st.success("Entry updated successfully!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to update entry.")
+                
+                if cancel_edit:
+                    st.session_state.pop('editing_journal_id')
+                    st.rerun()
+        st.markdown("---") # Separator after the edit form
+
+    # --- 3. Iterate and Display Entries ---
+    # `st.session_state.journal_entries` is already sorted newest first
+    for i, entry in enumerate(st.session_state.journal_entries):
+        doc_id = entry['id']
+        
+        # Unique key for expander title
+        title_display = entry['title'] if entry['title'] else 'Untitled Entry'
+        with st.expander(f"**{entry['date']}** — {title_display} ({entry.get('sentiment', 'N/A')})", expanded=False):
+            
+            col1, col2 = st.columns([1, 1])
+            col1.metric("Sentiment", entry.get('sentiment', 'N/A'))
+            col2.metric("Emotion", entry.get('emotion', 'N/A'))
+            
+            st.markdown("##### Entry Content")
+            st.markdown(entry['content'])
+
+            # Add Edit/Delete Buttons
+            st.markdown("---")
+            
+            # Using st.columns for button layout
+            btn_col1, btn_col2, _ = st.columns([1, 1, 4]) 
+            
+            # Check if we are already editing this or any other entry
+            is_editing_current = st.session_state.get('editing_journal_id') == doc_id
+            
+            with btn_col1:
+                if st.button("✏️ Edit", key=f"edit_btn_{doc_id}", disabled=is_editing_current):
+                    # Set the entry ID to session state to trigger the edit form/modal above
+                    st.session_state.editing_journal_id = doc_id
+                    st.rerun()
+
+            with btn_col2:
+                if st.button("🗑️ Delete", key=f"delete_btn_{doc_id}", disabled=is_editing_current):
+                    if delete_journal_entry(doc_id):
+                        st.session_state.chat_history, st.session_state.journal_entries, st.session_state.goals = load_data_from_firestore(current_email)
+                        st.success("Entry deleted successfully!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete entry.")
+            
+            st.markdown("") # Add some vertical space
