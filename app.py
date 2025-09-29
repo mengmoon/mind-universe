@@ -78,8 +78,6 @@ if 'journal_analysis' not in st.session_state:
     st.session_state.journal_analysis = None
 if 'goals' not in st.session_state:
     st.session_state.goals = [] 
-if 'pending_goal_action' not in st.session_state:
-    st.session_state.pending_goal_action = None 
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -153,7 +151,6 @@ def logout():
     st.session_state.current_tab = "💬 AI Mentor" 
     st.session_state.journal_analysis = None
     st.session_state.goals = []
-    st.session_state.pending_goal_action = None
     if 'chat_history' in st.session_state:
         st.session_state.chat_history = []
     if 'journal_entries' in st.session_state:
@@ -266,7 +263,7 @@ def save_new_goal(title, description):
     except Exception as e:
         st.error(f"Failed to save goal: {e}")
 
-# --- FIX: Dedicated Worker functions for Firestore and State manipulation ---
+# --- Worker functions for Firestore and State manipulation ---
 
 def update_goal_status_worker(goal_id, new_status):
     """Updates the status of a specific goal in Firestore and updates the session state in place."""
@@ -278,12 +275,14 @@ def update_goal_status_worker(goal_id, new_status):
         goal_doc_ref.update({"status": new_status})
         
         # 2. Update Session State in place
+        title = "Goal"
         for goal in st.session_state.goals:
             if goal.get('id') == goal_id:
                 goal['status'] = new_status
+                title = goal['title']
                 break
                 
-        st.toast(f"Goal '{goal['title']}' updated to {new_status}!", icon="🎉" if new_status == "Achieved" else "🎯")
+        st.toast(f"Goal '{title}' updated to {new_status}!", icon="🎉" if new_status == "Achieved" else "🎯")
     except Exception as e:
         st.error(f"Failed to update goal status: {e}")
 
@@ -301,34 +300,6 @@ def delete_goal_worker(goal_id):
         st.toast("Goal deleted successfully.", icon="🗑️")
     except Exception as e:
         st.error(f"Failed to delete goal: {e}")
-
-# --- 5. Streamlit Callback Wrappers (Now setting flag and rerunning) ---
-
-def handle_achieve_goal_click(goal_id):
-    """Sets a pending action flag and forces a rerun."""
-    # This happens during the unstable widget rendering phase
-    st.session_state.pending_goal_action = {'id': goal_id, 'action': 'Achieve'}
-    st.rerun() 
-
-def handle_delete_goal_click(goal_id):
-    """Sets a pending action flag and forces a rerun."""
-    # This happens during the unstable widget rendering phase
-    st.session_state.pending_goal_action = {'id': goal_id, 'action': 'Delete'}
-    st.rerun()
-
-def process_pending_goal_action():
-    """Executes the pending action worker function during the clean script run."""
-    if st.session_state.pending_goal_action:
-        action = st.session_state.pending_goal_action
-        goal_id = action['id']
-        action_type = action.get('action')
-        
-        if action_type == 'Achieve':
-            update_goal_status_worker(goal_id, 'Achieved') 
-        elif action_type == 'Delete':
-            delete_goal_worker(goal_id)
-            
-        st.session_state.pending_goal_action = None # Clear the flag for the next run
 
 # --- 6. LLM API Call Functions (Gemini Text and Structured Output) ---
 
@@ -498,9 +469,6 @@ def display_auth_page():
 def display_main_app():
     """Displays the main application content after successful login."""
     
-    # --- CRITICAL FIX: Process pending actions immediately on script rerun ---
-    process_pending_goal_action()
-
     # Load data if not already loaded in the current session
     if not st.session_state.user_data_loaded:
         with st.spinner("Loading your universe..."):
@@ -509,6 +477,27 @@ def display_main_app():
             st.session_state.journal_entries = journal_data
             st.session_state.goals = goals_data # Load goals
             st.session_state.user_data_loaded = True
+            
+    # --- CRITICAL FIX: Process goal actions by checking session state keys ---
+    # This must run BEFORE the UI renders to avoid the component key conflict
+    for goal in st.session_state.goals:
+        goal_id = goal['id']
+        
+        # 1. Check for ACHIEVE Button Click
+        achieve_key = f"achieve_goal_{goal_id}"
+        if st.session_state.get(achieve_key, False):
+            # Reset the session state key immediately to prevent re-triggering
+            st.session_state[achieve_key] = False 
+            update_goal_status_worker(goal_id, 'Achieved')
+            st.rerun() # Must rerun after state change for clean render
+
+        # 2. Check for DELETE Button Click
+        delete_key = f"delete_goal_{goal_id}"
+        if st.session_state.get(delete_key, False):
+            # Reset the session state key immediately
+            st.session_state[delete_key] = False
+            delete_goal_worker(goal_id)
+            st.rerun() # Must rerun after state change for clean render
     
     # --- Header ---
     st.title("🌌 Mind Universe")
@@ -814,13 +803,11 @@ def display_main_app():
                         if goal.get('description'):
                             st.markdown(f"> *{goal.get('description')}*")
                     with col_button:
-                        # The button now only sets the flag and forces a clean rerun
+                        # Use the goal ID directly as the key. Streamlit sets st.session_state[key] = True on click.
                         st.button(
                             "Mark Achieved 🎉", 
-                            key=f"achieve_{goal['id']}", 
-                            type="success",
-                            on_click=handle_achieve_goal_click,
-                            args=(goal['id'],) 
+                            key=f"achieve_goal_{goal['id']}", 
+                            type="success"
                         )
         else:
             st.info("You currently have no active goals. Time to set one!")
@@ -837,13 +824,11 @@ def display_main_app():
                     with col_achieved:
                         st.markdown(f"**{goal.get('title')}** (Achieved)")
                     with col_delete:
-                        # The button now only sets the flag and forces a clean rerun
+                        # Use the goal ID directly as the key. Streamlit sets st.session_state[key] = True on click.
                         st.button(
                             "Delete", 
-                            key=f"delete_{goal['id']}", 
-                            type="secondary",
-                            on_click=handle_delete_goal_click,
-                            args=(goal['id'],) 
+                            key=f"delete_goal_{goal['id']}", 
+                            type="secondary"
                         )
         else:
             st.info("Keep working! Achieved goals will appear here.")
