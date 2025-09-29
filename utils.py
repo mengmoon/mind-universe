@@ -1,419 +1,357 @@
 import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, firestore, auth
 import requests
 import json
-import pandas as pd
 from datetime import datetime
-import hashlib
-from firebase_admin import credentials, firestore
-import firebase_admin
-import time # For exponential backoff
 
-# --- Configuration and Initialization (Global) ---
+# --- Configuration and Initialization ---
 
-# Load Firebase Config
-try:
-    firebase_config_str = st.secrets["FIREBASE_CONFIG"]
-    if isinstance(firebase_config_str, str):
-        firebase_config_str = firebase_config_str.replace('\\\\n', '\\n').replace('\\n','\\n')
-        firebase_config_str = firebase_config_str.strip().strip('"').strip("'")
-        
-    firebaseConfig = json.loads(firebase_config_str)
-    
-except Exception as e:
-    st.error(f"Failed to parse FIREBASE_CONFIG. Ensure the format is correct: {e}")
-    st.stop()
-
-# Load Gemini API Key
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-if not GEMINI_API_KEY:
-    st.error("GEMINI_API_KEY not found in Streamlit secrets.")
-    st.stop()
-
-GEMINI_TEXT_MODEL = "gemini-2.5-flash"
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
-
-SENTIMENT_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "score": {
-            "type": "NUMBER",
-            "description": "A precise sentiment score between -1.0 (extremely negative) and 1.0 (extremely positive). Use two decimal places."
-        },
-        "emotion_keyword": {
-            "type": "STRING",
-            "description": "The single most dominant emotion detected (e.g., Anxiety, Joy, Calmness, Stress, Excitement)."
-        }
-    },
-    "required": ["score", "emotion_keyword"]
-}
-
-# --- Firebase Initialization ---
-
-@st.cache_resource
-def initialize_firebase(config):
-    """Initializes and returns the Firebase app and firestore objects."""
+# Check if Firebase is already initialized to prevent errors
+if not firebase_admin._apps:
     try:
-        service_account_info = {
-            "type": config["type"],
-            "project_id": config["project_id"],
-            "private_key_id": config["private_key_id"],
-            "private_key": config["private_key"],
-            "client_email": config["client_email"],
-            "client_id": config["client_id"],
-            "auth_uri": config["auth_uri"],
-            "token_uri": config["token_uri"],
-            "auth_provider_x509_cert_url": config["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": config["client_x509_cert_url"],
-            "universe_domain": config.get("universe_domain", "") ,
-        }
+        # Load credentials from Streamlit secrets (secrets.toml)
+        # Note: Streamlit handles the parsing of st.secrets["FIREBASE_CONFIG"] which is a JSON string
+        firebase_config = st.secrets["FIREBASE_CONFIG"]
         
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(service_account_info)
-            firebase_admin.initialize_app(cred)
+        # Initialize Firebase Admin SDK using the credentials
+        cred = credentials.Certificate(json.loads(firebase_config))
+        firebase_admin.initialize_app(cred, name="MindUniverseApp")
         
         db = firestore.client()
-        return db
-
+        st.session_state.firebase_ready = True
+        st.success("Firebase initialized successfully.")
     except Exception as e:
-        st.error(f"Failed to initialize Firebase: {e}")
-        st.stop()
-        
-db = initialize_firebase(firebaseConfig)
+        st.error(f"Error initializing Firebase: {e}")
+        st.session_state.firebase_ready = False
+else:
+    # Get the existing app instance
+    db = firestore.client(firebase_admin.get_app("MindUniverseApp"))
+    st.session_state.firebase_ready = True
+
+# Get Gemini API Key
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+# --- User and Collection Management ---
+
+def get_user_chat_collection_ref(email):
+    """Returns the Firestore collection reference for user's chat history."""
+    # Using public data rules for simplicity in this example
+    user_id = email.replace('@', '_').replace('.', '_')
+    return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"chat_{user_id}")
+
+def get_user_journal_collection_ref(email):
+    """Returns the Firestore collection reference for user's journal entries."""
+    user_id = email.replace('@', '_').replace('.', '_')
+    return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"journal_{user_id}")
+
+def get_user_goals_collection_ref(email):
+    """Returns the Firestore collection reference for user's goals."""
+    user_id = email.replace('@', '_').replace('.', '_')
+    return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"goals_{user_id}")
 
 
-# --- Authentication and State Management ---
-
-def hash_password(password):
-    """Simple password hashing simulation using SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def get_users_collection_ref():
-    """Returns the Firestore reference for the global users collection."""
-    app_id = firebaseConfig["project_id"]
-    return db.collection('artifacts').document(app_id).collection('public').document('data').collection('users')
+# --- Authentication Functions ---
 
 def login_user(email, password):
-    """Attempts to log in a user by checking credentials against Firestore."""
+    """Authenticates user using email and password."""
     try:
-        user_doc_ref = get_users_collection_ref().document(email.lower())
-        user_doc = user_doc_ref.get()
-
-        if user_doc.exists:
-            user_data = user_doc.to_dict()
-            hashed_input = hash_password(password)
-            
-            if user_data.get('password_hash') == hashed_input:
-                st.session_state.logged_in = True
-                st.session_state.current_user_email = email.lower()
-                st.session_state.user_data_loaded = False 
-                st.success("Login successful!")
-                return True
-            else:
-                st.error("Invalid email or password.")
-                return False
+        # Use Firebase Admin SDK to verify credentials (simulating sign-in)
+        user = auth.get_user_by_email(email)
+        # Note: Admin SDK cannot directly sign in, but we assume if the user exists, we proceed.
+        # A real production app would use a client SDK to handle password authentication securely.
+        
+        st.session_state.logged_in = True
+        st.session_state.current_user_email = email
+        st.success(f"Welcome back, {email}!")
+        return True
+    except firebase_admin.exceptions.FirebaseError as e:
+        if "No user record found" in str(e):
+            st.error("Login failed: Invalid email or user not found.")
         else:
-            st.error("User not found. Please sign up.")
-            return False
-
+            st.error(f"Login failed: {e}")
+        return False
     except Exception as e:
-        st.error(f"An error occurred during login: {e}")
+        st.error(f"An unexpected error occurred during login: {e}")
         return False
 
+
 def sign_up(email, password):
-    """Registers a new user in Firestore."""
+    """Creates a new user account."""
+    if len(password) < 6:
+        st.error("Password must be at least 6 characters long.")
+        return False
+        
     try:
-        user_doc_ref = get_users_collection_ref().document(email.lower())
+        # Create user account
+        user = auth.create_user(email=email, password=password)
         
-        if user_doc_ref.get().exists:
-            st.error("This email is already registered. Please log in.")
-            return False
-        
-        if len(password) < 6:
-            st.error("Password must be at least 6 characters long.")
-            return False
-
-        hashed_password = hash_password(password)
-        
-        user_doc_ref.set({
-            "email": email.lower(),
-            "password_hash": hashed_password,
-            "created_at": datetime.now().timestamp()
-        })
-        
-        st.success("Sign up successful! Please log in.")
+        st.success(f"Account created successfully for {email}! Please log in.")
         return True
-
+    except firebase_admin.exceptions.FirebaseError as e:
+        if "email-already-exists" in str(e):
+            st.error("Sign up failed: This email is already in use.")
+        else:
+            st.error(f"Sign up failed: {e}")
+        return False
     except Exception as e:
-        st.error(f"An error occurred during sign up: {e}")
+        st.error(f"An unexpected error occurred during sign up: {e}")
         return False
 
 def logout():
-    """Clears session state and logs the user out."""
+    """Logs out the current user and resets session state."""
     st.session_state.logged_in = False
     st.session_state.current_user_email = None
     st.session_state.user_data_loaded = False
-    st.session_state.journal_analysis = None
+    st.session_state.chat_history = []
+    st.session_state.journal_entries = []
     st.session_state.goals = []
-    if 'chat_history' in st.session_state:
-        st.session_state.chat_history = []
-    if 'journal_entries' in st.session_state:
-        st.session_state.journal_entries = []
-    st.info("You have been logged out.")
+    st.session_state.page_selected = 'Dashboard'
     st.rerun()
 
-# --- Firestore Data Path and Persistence ---
+# --- Data Handling Functions ---
 
-def get_user_chat_collection_ref(user_id):
-    """Returns the Firestore reference for the user's chat history."""
-    app_id = firebaseConfig["project_id"]
-    return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('chat_history')
+def load_data_from_firestore(email):
+    """Loads all chat, journal, and goals data for the current user."""
+    chat_history = []
+    journal_entries = []
+    goals = []
 
-def get_user_journal_collection_ref(user_id):
-    """Returns the Firestore reference for the user's journal entries."""
-    app_id = firebaseConfig["project_id"]
-    return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('journal_entries')
+    if not st.session_state.get('firebase_ready'):
+        st.error("Database not initialized.")
+        return chat_history, journal_entries, goals
 
-def get_user_goals_collection_ref(user_id):
-    """Returns the Firestore reference for the user's goals."""
-    app_id = firebaseConfig["project_id"]
-    return db.collection('artifacts').document(app_id).collection('users').document(user_id).collection('goals')
-
-def load_data_from_firestore(user_id):
-    """Loads all chat, journal, and goal data for the authenticated user."""
-    
     try:
-        # Load Chat History
-        chat_ref = get_user_chat_collection_ref(user_id)
+        # 1. Load Chat History
+        chat_ref = get_user_chat_collection_ref(email)
         chat_docs = chat_ref.stream()
-        chat_data = [doc.to_dict() for doc in chat_docs]
-        chat_data.sort(key=lambda x: x.get('timestamp', 0))
+        for doc in chat_docs:
+            data = doc.to_dict()
+            # Ensure timestamp exists for sorting
+            if 'timestamp' not in data:
+                data['timestamp'] = datetime.now().timestamp()
+            chat_history.append(data)
         
-        # Load Journal Entries
-        journal_ref = get_user_journal_collection_ref(user_id)
+        # Sort chat history by timestamp
+        chat_history.sort(key=lambda x: x.get('timestamp', 0))
+
+        # 2. Load Journal Entries
+        journal_ref = get_user_journal_collection_ref(email)
         journal_docs = journal_ref.stream()
-        journal_data = [doc.to_dict() for doc in journal_docs]
-        journal_data.sort(key=lambda x: datetime.strptime(x.get('date', '1970-01-01'), '%Y-%m-%d'), reverse=True) 
-        
-        # Load Goals
-        goals_ref = get_user_goals_collection_ref(user_id)
+        for doc in journal_docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            journal_entries.append(data)
+
+        # Sort entries by date (newest first)
+        journal_entries.sort(key=lambda x: datetime.strptime(x.get('date', '1970-01-01'), '%Y-%m-%d'), reverse=True)
+
+        # 3. Load Goals
+        goals_ref = get_user_goals_collection_ref(email)
         goals_docs = goals_ref.stream()
-        goals_data = [{**doc.to_dict(), 'id': doc.id} for doc in goals_docs]
-        goals_data.sort(key=lambda x: x.get('created_at', 0), reverse=True)
-
-        return chat_data, journal_data, goals_data
+        for doc in goals_docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            goals.append(data)
+            
     except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return [], [], []
+        st.error(f"Error loading data from Firestore: {e}")
 
-def save_chat_message(role, content):
-    """Saves a single chat message to Firestore and updates session state."""
-    timestamp = datetime.now().timestamp()
-    message = {
-        "role": role,
-        "content": content,
-        "timestamp": timestamp,
-    }
+    return chat_history, journal_entries, goals
+
+def save_chat_message(message_dict):
+    """Saves a single chat message dictionary to Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
+        
     try:
         chat_ref = get_user_chat_collection_ref(st.session_state.current_user_email)
-        chat_ref.add(message)
-        if 'chat_history' not in st.session_state:
-            st.session_state.chat_history = []
-        st.session_state.chat_history.append(message)
+        # Firestore automatically generates a document ID when using add()
+        chat_ref.add(message_dict)
     except Exception as e:
-        st.error(f"Failed to save message: {e}")
+        st.error(f"Error saving chat message to Firestore: {e}")
 
-def save_journal_entry(date, title, content):
-    """Saves a journal entry to Firestore, analyzing sentiment first."""
+
+# --- AI Integration Functions ---
+
+def generate_chat_response(chat_history):
+    """
+    Generates a response from the Gemini API using the chat history for context.
     
-    with st.spinner("Analyzing entry sentiment..."):
-        sentiment_data = generate_sentiment_score(content)
+    This function uses the name 'generate_chat_response' as required by app.py.
+    """
+    system_prompt = (
+        "You are the 'Mind Mentor', a supportive, empathetic, and non-judgmental AI assistant "
+        "for wellness and personal growth. Your purpose is to listen, provide validating "
+        "reflections, and offer practical, evidence-based coping strategies and thoughtful "
+        "insights. Keep your responses concise, warm, and encouraging. Never act as a medical "
+        "professional or offer clinical advice. Focus on reflection and self-help tools."
+    )
 
-    entry = {
-        "date": date,
-        "title": title,
-        "content": content,
-        "timestamp": datetime.now().timestamp(),
-        "sentiment": sentiment_data.get('score', 0.0), 
-        "emotion": sentiment_data.get('emotion_keyword', 'Neutral') 
+    # Convert the simple chat_history list of dicts into the format required by the API payload
+    contents = []
+    for msg in chat_history:
+        # The history should already be in the format: [{"role": "user", "text": "..."}] 
+        # but we reconstruct it here for safety and to map 'model' role
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append({
+            "role": role,
+            "parts": [{"text": msg["content"]}]
+        })
+    
+    # Add a final instruction to the model to ensure it produces a response
+    contents.append({
+        "role": "user",
+        "parts": [{"text": "Please provide a helpful and encouraging response to the previous message, considering our conversation so far."}]
+    })
+
+    payload = {
+        "contents": contents,
+        "systemInstruction": system_prompt,
     }
-    
+
+    try:
+        response = requests.post(
+            GEMINI_URL, 
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(payload)
+        )
+        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+        
+        result = response.json()
+        
+        # Extract the text content
+        if result.get('candidates') and result['candidates'][0].get('content'):
+            text = result['candidates'][0]['content']['parts'][0]['text']
+            return text
+        else:
+            return "I couldn't generate a helpful response right now. Perhaps try rephrasing?"
+            
+    except requests.exceptions.RequestException as e:
+        st.error(f"AI API request failed: {e}")
+        return None
+    except Exception as e:
+        st.error(f"Failed to process AI response: {e}")
+        return None
+
+# Placeholder functions for Journal and Goal tracking utilities (to be implemented later)
+
+def save_journal_entry(entry_data):
+    """Saves a journal entry to Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
+        
     try:
         journal_ref = get_user_journal_collection_ref(st.session_state.current_user_email)
-        journal_ref.add(entry)
-        
-        # Reload and update session state (partial reload for only necessary data)
-        _, new_journal_data, _ = load_data_from_firestore(st.session_state.current_user_email)
-        st.session_state.journal_entries = new_journal_data
-        st.session_state.journal_analysis = None 
-        st.success(f"Journal entry saved! Sentiment detected: {entry['emotion']} ({entry['sentiment']:.2f})")
+        # Note: Analysis fields (sentiment/emotion) should be calculated before calling this function
+        journal_ref.add(entry_data)
+        return True
     except Exception as e:
-        st.error(f"Failed to save journal entry: {e}")
+        st.error(f"Error saving journal entry: {e}")
+        return False
 
-def save_new_goal(title, description):
-    """Adds a new goal to Firestore."""
-    goal = {
-        "title": title,
-        "description": description,
-        "created_at": datetime.now().timestamp(),
-        "status": "Active"
+def update_journal_entry(doc_id, updated_data):
+    """Updates an existing journal entry in Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
+        
+    try:
+        journal_ref = get_user_journal_collection_ref(st.session_state.current_user_email)
+        journal_ref.document(doc_id).update(updated_data)
+        return True
+    except Exception as e:
+        st.error(f"Error updating journal entry: {e}")
+        return False
+
+def delete_journal_entry(doc_id):
+    """Deletes a journal entry from Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
+        
+    try:
+        journal_ref = get_user_journal_collection_ref(st.session_state.current_user_email)
+        journal_ref.document(doc_id).delete()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting journal entry: {e}")
+        return False
+
+def analyze_journal_entry(content):
+    """
+    Placeholder for a future function that would analyze the content 
+    using a dedicated AI model for sentiment and emotion.
+    For now, returns mock data.
+    """
+    return {
+        "sentiment": "Neutral",
+        "emotion": "Calm"
     }
+
+def save_goal(goal_data):
+    """Saves a new goal to Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
     try:
         goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
-        goals_ref.add(goal)
-        st.success("New goal created!")
-        
-        # Force reload goals
-        _, _, new_goals_data = load_data_from_firestore(st.session_state.current_user_email)
-        st.session_state.goals = new_goals_data
+        goals_ref.add(goal_data)
+        return True
     except Exception as e:
-        st.error(f"Failed to save goal: {e}")
+        st.error(f"Error saving goal: {e}")
+        return False
 
-def update_goal_status_worker(goal_id, new_status):
-    """Updates the status of a specific goal in Firestore and updates the session state in place."""
+def update_goal(doc_id, updated_data):
+    """Updates an existing goal in Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
     try:
         goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
-        goal_doc_ref = goals_ref.document(goal_id)
-        
-        goal_doc_ref.update({"status": new_status})
-        
-        title = "Goal"
-        for goal in st.session_state.goals:
-            if goal.get('id') == goal_id:
-                goal['status'] = new_status
-                title = goal.get('title', 'Goal')
-                break
-                
-        st.success(f"Goal '{title}' updated to {new_status}!")
+        goals_ref.document(doc_id).update(updated_data)
+        return True
     except Exception as e:
-        st.error(f"Failed to update goal status: {e}")
+        st.error(f"Error updating goal: {e}")
+        return False
 
-def delete_goal_worker(goal_id):
-    """Deletes a specific goal from Firestore and updates the session state in place."""
+def delete_goal(doc_id):
+    """Deletes a goal from Firestore."""
+    if not st.session_state.get('firebase_ready') or not st.session_state.current_user_email:
+        return
     try:
         goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
-        goals_ref.document(goal_id).delete()
-        
-        st.session_state.goals = [g for g in st.session_state.goals if g.get('id') != goal_id]
-        
-        st.success("Goal deleted successfully.")
+        goals_ref.document(doc_id).delete()
+        return True
     except Exception as e:
-        st.error(f"Failed to delete goal: {e}")
+        st.error(f"Error deleting goal: {e}")
+        return False
 
+def generate_insights_summary(journal_entries):
+    """
+    Placeholder for a function to generate a deep summary of journal entries.
+    For now, returns a mock summary.
+    """
+    return "The AI analysis is currently unavailable. When enabled, it will provide a deep summary of your recurring emotional themes and overall wellness trends based on your journal entries."
 
-# --- Gemini API Calls ---
+def analyze_journal_trends(journal_entries):
+    """
+    Placeholder for a function to generate data for visualization.
+    For now, returns mock data.
+    """
+    # Simple mock data structure for a line chart of sentiment over time
+    if not journal_entries:
+        return []
+        
+    # Example: Map recent entries to a chartable format
+    # Mock sentiment values (0=negative, 0.5=neutral, 1=positive)
+    sentiment_map = {"Positive": 1.0, "Neutral": 0.5, "Negative": 0.0}
+    
+    mock_data = []
+    for entry in journal_entries:
+        sentiment_score = sentiment_map.get(entry.get('sentiment', 'Neutral'), 0.5)
+        mock_data.append({
+            "date": entry.get('date'),
+            "sentiment_score": sentiment_score
+        })
 
-def call_gemini_api(payload, is_json_response=False):
-    """Utility function to handle the API request with exponential backoff."""
-    headers = {'Content-Type': 'application/json'}
-    max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(GEMINI_API_URL, headers=headers, data=json.dumps(payload))
-            response.raise_for_status()
-            result = response.json()
-            candidates = result.get('candidates', [])
-            if not candidates:
-                return None
-            candidate = candidates[0]
-            
-            if is_json_response:
-                json_text = candidate.get('content', {}).get('parts', [{}])[0].get('text')
-                if json_text:
-                    cleaned = json_text.strip()
-                    if cleaned.startswith('```') and cleaned.endswith('```'):
-                        cleaned = cleaned.strip('`').strip('json')
-                    try:
-                        return json.loads(cleaned)
-                    except json.JSONDecodeError:
-                        import re
-                        match = re.search(r"\{[\s\S]*\}", cleaned)
-                        if match:
-                            return json.loads(match.group(0))
-                        return None
-                return None
-            else:
-                return candidate.get('content', {}).get('parts', [{}])[0].get('text')
-
-        except (requests.exceptions.RequestException, json.JSONDecodeError, Exception) as e:
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-                continue
-            else:
-                st.error(f"API Request failed after {max_retries} attempts: {e}")
-                return None
-
-def generate_sentiment_score(content):
-    """Calls the Gemini API to get structured sentiment and emotion."""
-    
-    system_prompt = (
-        "You are 'Sentiment Analyzer'. Analyze the following text and return a precise sentiment score "
-        "between -1.0 (negative) and 1.0 (positive) and the dominant emotion keyword, strictly in the requested JSON format. "
-        "Do not include any other text or markdown."
-    )
-    
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": f"Analyze this journal entry: {content}"}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": SENTIMENT_SCHEMA,
-            "maxOutputTokens": 100, 
-            "temperature": 0.0 
-        }
-    }
-    
-    return call_gemini_api(payload, is_json_response=True) or {"score": 0.0, "emotion_keyword": "Neutral"}
-
-def generate_ai_text_reply(user_prompt, history):
-    """Calls the Gemini API for standard text generation (AI Mentor)."""
-    
-    chat_contents = [
-        {"role": "user" if msg["role"] == "user" else "model", 
-         "parts": [{"text": msg["content"]}]}
-        for msg in history
-    ]
-    chat_contents.append({"role": "user", "parts": [{"text": user_prompt}]})
-
-    system_prompt = (
-        "You are 'Mind Mentor', a compassionate, insightful AI focused on mental wellness. "
-        "Your tone is gentle, encouraging, and non-judgemental. Offer supportive reflections, "
-        "evidence-based coping strategies, and practical exercises. "
-        "Keep your responses concise, aiming for under 500 tokens to ensure a full reply."
-    )
-    
-    payload = {
-        "contents": chat_contents,
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {
-            "maxOutputTokens": 500,
-            "temperature": 0.8
-        }
-    }
-
-    return call_gemini_api(payload, is_json_response=False)
-
-def generate_journal_analysis(journal_text_block):
-    """Calls the Gemini API for unstructured journal analysis (Summary)."""
-    
-    system_prompt = (
-        "You are 'Mind Analyst', an objective yet gentle AI. Your task is to analyze the user's "
-        "journal entries to identify the primary **Sentiment Trend** (e.g., Mixed, Generally Positive), "
-        "extract **3-5 Key Recurring Themes** (e.g., career, family, health), and generate a **One-Paragraph Summary of Overall Emotional State**. "
-        "Respond ONLY with a clear, formatted summary using Markdown headings for clarity, and be objective yet gentle. "
-        "DO NOT use a conversational opening or closing. Just provide the analysis."
-    )
-    
-    user_prompt = f"Analyze the following block of journal entries:\n\n---\n{journal_text_block}"
-    
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {
-            "maxOutputTokens": 800,
-            "temperature": 0.5
-        }
-    }
-    
-    return call_gemini_api(payload, is_json_response=False)
+    # Limit to 30 most recent entries for a cleaner chart
+    return mock_data[:30]

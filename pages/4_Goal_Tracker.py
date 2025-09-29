@@ -94,4 +94,4 @@ def app():
     else:
         st.info("No goals achieved yet. Keep striving!")
 
-
+app()

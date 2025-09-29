@@ -38,3 +38,4 @@ def app():
                 st.error("Failed to receive a reply from the AI Mentor. Please try again.")
 
 
+app()
