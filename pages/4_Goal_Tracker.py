@@ -2,6 +2,22 @@ import streamlit as st
 from datetime import datetime
 from utils import save_new_goal, update_goal_status_worker, delete_goal_worker
 
+# --- Local Action Handlers (using on_click) ---
+
+def handle_achieve_goal(goal_id):
+    """Marks a goal as Achieved and triggers a rerun to update the UI."""
+    update_goal_status_worker(goal_id, 'Achieved')
+    # Use st.rerun to refresh the page state after data is updated in Firestore
+    st.rerun()
+
+def handle_delete_goal(goal_id):
+    """Deletes a goal and triggers a rerun to update the UI."""
+    delete_goal_worker(goal_id)
+    # Use st.rerun to refresh the page state after data is updated in Firestore
+    st.rerun()
+
+# ---------------------------------------------
+
 def app():
     if not st.session_state.logged_in:
         st.warning("Please log in via the Home page to track your goals.")
@@ -10,33 +26,7 @@ def app():
     st.header("🎯 Goal Tracker")
     st.caption("Set measurable wellness objectives and track your progress.")
 
-    # --- Goal Action Processor (Must run before UI renders) ---
-    goals_to_process = list(st.session_state.goals) 
-    rerun_needed = False
-
-    for goal in goals_to_process:
-        goal_id = goal['id']
-        
-        # Check for ACHIEVE Button Click 
-        achieve_key = f"achieve_goal_{goal_id}"
-        if goal.get('status') == 'Active' and st.session_state.get(achieve_key, False):
-            st.session_state[achieve_key] = False 
-            update_goal_status_worker(goal_id, 'Achieved')
-            rerun_needed = True
-            
-        # Check for DELETE Button Click
-        delete_key = f"delete_goal_{goal_id}"
-        if goal.get('status') == 'Achieved' and st.session_state.get(delete_key, False):
-            st.session_state[delete_key] = False
-            delete_goal_worker(goal_id)
-            rerun_needed = True
-            
-    if rerun_needed:
-        st.rerun()
-    # --- End Action Processor ---
-
-
-    # Goal Creation Form
+    # --- Goal Creation Form ---
     with st.form("goal_form", clear_on_submit=True):
         st.subheader("Create a New Goal")
         goal_title = st.text_input("Goal Title (e.g., 'Practice mindfulness 15 mins daily')")
@@ -64,9 +54,12 @@ def app():
                 st.markdown(f"*{goal.get('description', 'No description')}*")
             
             with col_button:
+                # Use on_click callback to process the goal status change
                 st.button(
                     "Achieved", 
                     key=f"achieve_goal_{goal['id']}", 
+                    on_click=handle_achieve_goal,
+                    args=(goal['id'],),
                     help="Mark this goal as completed.",
                     use_container_width=True
                 )
@@ -88,9 +81,12 @@ def app():
                 st.caption(f"Completed goal created on: {creation_time}") 
             
             with col_button:
+                # Use on_click callback to process the goal deletion
                 st.button(
                     "Delete", 
                     key=f"delete_goal_{goal['id']}", 
+                    on_click=handle_delete_goal,
+                    args=(goal['id'],),
                     help="Permanently delete this goal record.",
                     type="secondary",
                     use_container_width=True
