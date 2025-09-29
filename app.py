@@ -192,10 +192,30 @@ if st.session_state.logged_in:
     # 2. Display the Sidebar for all logged-in pages
     display_sidebar()
     
-    # The actual page content is handled by the files in the 'pages/' folder
-    st.title("🌌 Mind Universe")
-    st.header("Welcome back!")
-    st.info("Please use the navigation links in the sidebar to access the AI Mentor, Journal, Insights, and Goal Tracker.")
+    # 3. Display the Feature Dashboard (The new landing page content)
+    st.title("🌌 Mind Universe Dashboard")
+    st.markdown("---")
+    st.subheader("Explore Your Wellness Tools")
+    st.markdown("Click any feature in the sidebar to begin your journey.")
+    
+    col1, col2 = st.columns(2)
+    col3, col4 = st.columns(2)
+    
+    with col1:
+        st.success("### 💬 AI Mentor")
+        st.markdown("Have a private, non-judgmental chat. Get supportive reflections and coping strategies powered by Gemini.")
+        
+    with col2:
+        st.warning("### ✍️ Wellness Journal")
+        st.markdown("Record your daily thoughts and feelings. Entries are automatically analyzed for **sentiment** and **emotion**.")
+        
+    with col3:
+        st.info("### 📊 Insights")
+        st.markdown("Visualize your emotional trends over time. Generate a **deep AI summary** of your recurring themes and overall emotional state.")
+        
+    with col4:
+        st.error("### 🎯 Goal Tracker")
+        st.markdown("Set and monitor your personal wellness objectives. Easily mark goals as achieved and track your progress.")
 
 else:
     display_auth_page()
