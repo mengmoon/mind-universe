@@ -7,48 +7,65 @@ from datetime import datetime
 
 # --- Configuration and Initialization ---
 
-# Check if Firebase is already initialized to prevent errors
-if not firebase_admin._apps:
+APP_NAME = "MindUniverseApp"
+
+# Get Gemini API Key (loaded from secrets.toml)
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+# --- Firebase Resilient Initialization ---
+# Use a try/except ValueError pattern, which is the most reliable way
+# to check if a named Firebase Admin app is already initialized.
+
+db = None
+st.session_state.firebase_ready = False
+
+try:
+    # 1. Check if the app is already running (e.g., on a Streamlit rerun)
+    app_instance = firebase_admin.get_app(APP_NAME)
+    db = firestore.client(app_instance)
+    st.session_state.firebase_ready = True
+except ValueError:
+    # 2. If it's not running (ValueError raised), initialize it
     try:
         # Load credentials from Streamlit secrets (secrets.toml)
-        # Note: Streamlit handles the parsing of st.secrets["FIREBASE_CONFIG"] which is a JSON string
         firebase_config = st.secrets["FIREBASE_CONFIG"]
         
         # Initialize Firebase Admin SDK using the credentials
         cred = credentials.Certificate(json.loads(firebase_config))
-        firebase_admin.initialize_app(cred, name="MindUniverseApp")
+        app_instance = firebase_admin.initialize_app(cred, name=APP_NAME)
         
-        db = firestore.client()
+        # Get the Firestore client associated with the new app instance
+        db = firestore.client(app_instance)
         st.session_state.firebase_ready = True
         st.success("Firebase initialized successfully.")
     except Exception as e:
         st.error(f"Error initializing Firebase: {e}")
-        st.session_state.firebase_ready = False
-else:
-    # Get the existing app instance
-    db = firestore.client(firebase_admin.get_app("MindUniverseApp"))
-    st.session_state.firebase_ready = True
+        # db remains None if initialization failed
 
-# Get Gemini API Key
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
 # --- User and Collection Management ---
 
 def get_user_chat_collection_ref(email):
     """Returns the Firestore collection reference for user's chat history."""
+    if db is None:
+        raise ConnectionError("Firestore database client is not initialized.")
     # Using public data rules for simplicity in this example
     user_id = email.replace('@', '_').replace('.', '_')
     return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"chat_{user_id}")
 
 def get_user_journal_collection_ref(email):
     """Returns the Firestore collection reference for user's journal entries."""
+    if db is None:
+        raise ConnectionError("Firestore database client is not initialized.")
     user_id = email.replace('@', '_').replace('.', '_')
     return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"journal_{user_id}")
 
 def get_user_goals_collection_ref(email):
     """Returns the Firestore collection reference for user's goals."""
+    if db is None:
+        raise ConnectionError("Firestore database client is not initialized.")
     user_id = email.replace('@', '_').replace('.', '_')
     return db.collection("artifacts").document("minduniverse-app").collection("public").document("data").collection(f"goals_{user_id}")
 
@@ -59,9 +76,9 @@ def login_user(email, password):
     """Authenticates user using email and password."""
     try:
         # Use Firebase Admin SDK to verify credentials (simulating sign-in)
-        user = auth.get_user_by_email(email)
+        # Explicitly pass the app instance to auth functions for robustness
+        user = auth.get_user_by_email(email, app=firebase_admin.get_app(APP_NAME))
         # Note: Admin SDK cannot directly sign in, but we assume if the user exists, we proceed.
-        # A real production app would use a client SDK to handle password authentication securely.
         
         st.session_state.logged_in = True
         st.session_state.current_user_email = email
@@ -86,7 +103,8 @@ def sign_up(email, password):
         
     try:
         # Create user account
-        user = auth.create_user(email=email, password=password)
+        # Explicitly pass the app instance to auth functions for robustness
+        user = auth.create_user(email=email, password=password, app=firebase_admin.get_app(APP_NAME))
         
         st.success(f"Account created successfully for {email}! Please log in.")
         return True
@@ -193,7 +211,7 @@ def generate_chat_response(chat_history):
     # Convert the simple chat_history list of dicts into the format required by the API payload
     contents = []
     for msg in chat_history:
-        # The history should already be in the format: [{"role": "user", "text": "..."}] 
+        # The history should already be in the format: [{"role": "user", "content": "..."}] 
         # but we reconstruct it here for safety and to map 'model' role
         role = "user" if msg["role"] == "user" else "model"
         contents.append({
