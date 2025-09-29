@@ -238,6 +238,7 @@ def ai_mentor_app():
     # Display messages using st.chat_message
     for message in st.session_state.chat_history:
         role = "user" if message["role"] == "user" else "assistant"
+        # Using the suggested avatars for better visual distinction
         avatar = "👤" if role == "user" else "🧠"
         
         with st.chat_message(role, avatar=avatar):
@@ -263,7 +264,7 @@ def ai_mentor_app():
         with st.chat_message("assistant", avatar="🧠"):
             with st.spinner("Mind Mentor is reflecting..."):
                 
-                # Prepare history for the LLM call
+                # Prepare history for the LLM call using the correct imported function name
                 llm_history = [
                     {"role": "user", "text": msg["content"]} 
                     if msg["role"] == "user" else 
