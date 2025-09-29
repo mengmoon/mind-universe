@@ -751,118 +751,129 @@ def display_main_app():
             else:
                 st.warning("No entries with sentiment data found. Save new journal entries to chart your trend.")
 
-        # --- 3.3 Emotion Frequency (Bar Chart - NEW) ---
+        # --- 3.3 Emotion Frequency (Bar Chart) ---
         with tab_frequency:
             st.subheader("Frequency of Detected Emotions")
             
             if chart_data:
-                # Group by emotion keyword and count
+                # Count emotion frequency
                 emotion_counts = df['emotion'].value_counts().reset_index()
                 emotion_counts.columns = ['Emotion', 'Count']
                 
-                st.bar_chart(emotion_counts, x='Emotion', y='Count')
-                st.markdown("This chart shows the most frequent emotional keywords detected by the AI in your entries. Understanding which emotions are dominant can reveal underlying patterns in your life.")
+                # Use a specific color for styling
+                st.bar_chart(emotion_counts, x='Emotion', y='Count', color="#88C0D0", height=300)
+                st.info("This chart shows the primary emotion keyword detected by the AI for each entry, helping you visualize your dominant emotional landscape.")
             else:
-                st.info("Write more journal entries to generate this frequency chart.")
+                st.warning("No entries with sentiment data found. Save new journal entries to analyze emotion frequency.")
 
-
-        # --- 3.4 General Analysis Summary ---
+        # --- 3.4 Deep Summary (AI Analysis) ---
         with tab_summary:
-            st.subheader("AI-Generated Journal Summary")
-
-            entries_to_analyze = st.session_state.journal_entries[:10]
-            journal_text_block = ""
-            for i, entry in enumerate(entries_to_analyze):
-                journal_text_block += f"=== Entry {i+1} ({entry.get('date', 'N/A')}): {entry.get('title', 'No Title')} ===\n"
-                journal_text_block += f"{entry.get('content', '')}\n\n"
+            st.subheader("Comprehensive Journal Summary")
             
-            if st.button(f"Generate Summary from Last {len(entries_to_analyze)} Entries"):
-                st.session_state.journal_analysis = None 
-                with st.spinner("Mind Analyst is reading your reflections..."):
-                    analysis_result = generate_journal_analysis(journal_text_block)
-                    st.session_state.journal_analysis = analysis_result
+            # Button to trigger analysis (only if there are entries)
+            if st.button("Generate Deep AI Analysis"):
+                st.session_state.journal_analysis = None # Clear existing analysis to force recalculation
+
+            if st.session_state.journal_analysis is None:
+                # Check if we should calculate now or wait for button click
+                if st.session_state.journal_entries:
+                    # 1. Prepare the text block for the LLM
+                    journal_text_block = ""
+                    for entry in st.session_state.journal_entries:
+                        # Concatenate content and sentiment/emotion data
+                        journal_text_block += (
+                            f"Date: {entry.get('date', 'N/A')}\n"
+                            f"Title: {entry.get('title', 'Untitled')}\n"
+                            f"Sentiment: {entry.get('emotion', 'Neutral')} ({entry.get('sentiment', 0.0):.2f})\n"
+                            f"Content: {entry.get('content', '')[:500]}...\n\n" # Limit content length for efficiency
+                        )
                     
+                    if journal_text_block:
+                        with st.spinner("The Mind Analyst is synthesizing your entries... this may take a moment."):
+                            analysis_result = generate_journal_analysis(journal_text_block)
+                        st.session_state.journal_analysis = analysis_result
+                    else:
+                        st.warning("No entries available to analyze.")
+                        st.session_state.journal_analysis = "No data available."
+                else:
+                    st.info("Write a few journal entries and click 'Generate Deep AI Analysis' to see a summary of your trends.")
+
+            # 2. Display the analysis result if available
             if st.session_state.journal_analysis:
+                st.markdown("---")
                 st.markdown(st.session_state.journal_analysis)
-            else:
-                st.info("Click the button above to generate a new analysis of your recent journal entries.")
+                st.caption("This analysis summarizes themes and trends across all your entries.")
 
 
     elif st.session_state.current_tab == "🎯 Goal Tracker":
-        # Content 4: Goal Setting (NEW PAGE)
-        st.header("Achieve Your Aspirations")
-        st.caption("Set goals, track progress, and celebrate your successes!")
-        
-        # --- Goal Creation Form ---
-        with st.expander("➕ Create a New Goal", expanded=False):
-            with st.form("goal_form", clear_on_submit=True):
-                goal_title = st.text_input("Goal Title (e.g., Meditate daily for 15 mins)")
-                goal_description = st.text_area("Detailed Plan/Description")
-                submitted = st.form_submit_button("Set Goal")
+        # Content 4: Goal Tracker
+        st.header("Set & Track Your Wellness Goals")
+        st.caption("Use this space to define measurable wellness and mental health objectives.")
 
-                if submitted and goal_title:
-                    save_new_goal(goal_title, goal_description)
-                    st.rerun()
-                elif submitted and not goal_title:
-                    st.warning("Please provide a title for your goal.")
+        # Goal Creation Form
+        with st.form("goal_form", clear_on_submit=True):
+            st.subheader("Create a New Goal")
+            goal_title = st.text_input("Goal Title (e.g., 'Practice mindfulness 15 mins daily')")
+            goal_description = st.text_area("Details & Why (e.g., 'To reduce anxiety and increase focus.')", height=100)
+            
+            submitted = st.form_submit_button("Add Goal")
+            
+            if submitted and goal_title and goal_description:
+                save_new_goal(goal_title, goal_description)
+                st.rerun()
+            elif submitted and (not goal_title or not goal_description):
+                st.warning("Please provide both a title and description for your goal.")
 
         st.divider()
 
-        # --- Goal Lists ---
+        # Goal Display
+        st.subheader("Active Goals")
         active_goals = [g for g in st.session_state.goals if g.get('status') == 'Active']
-        achieved_goals = [g for g in st.session_state.goals if g.get('status') == 'Achieved']
-
-        # Active Goals
-        st.subheader(f"🚀 Active Goals ({len(active_goals)})")
         
-        # Use a simple container (no unsupported args)
-        with st.container():
-            if active_goals:
-                for goal in active_goals:
-                    with st.container():
-                        col_title, col_button = st.columns([4, 1])
-                        with col_title:
-                            st.markdown(f"**{goal.get('title')}**")
-                            created_at_dt = datetime.fromtimestamp(goal.get('created_at', datetime.now().timestamp()))
-                            st.caption(f"Started: {created_at_dt.strftime('%Y-%m-%d')}")
-                            if goal.get('description'):
-                                st.markdown(f"> *{goal.get('description')}*")
-                        with col_button:
-                            # Use the goal ID directly as the key. Checked at the top of display_main_app.
-                            st.button(
-                                "Mark Achieved 🎉", 
-                                key=f"achieve_goal_{goal['id']}"
-                            )
-            else:
-                st.info("You currently have no active goals. Time to set one!")
-
+        if active_goals:
+            for goal in active_goals:
+                with st.container(border=True):
+                    st.markdown(f"### 🎯 {goal.get('title', 'Untitled Goal')}")
+                    st.markdown(f"*{goal.get('description', 'No description')}*")
+                    
+                    # Button to set goal as Achieved
+                    # Logic handled at the top of display_main_app
+                    st.button(
+                        "Mark as Achieved", 
+                        key=f"achieve_goal_{goal['id']}", 
+                        help="Move this goal to the 'Achieved' list."
+                    )
+        else:
+            st.info("You currently have no active goals. Set one above!")
+            
         st.divider()
 
-        # Achieved Goals
-        st.subheader(f"✅ Achieved Goals ({len(achieved_goals)})")
+        st.subheader("Achieved Goals")
+        achieved_goals = [g for g in st.session_state.goals if g.get('status') == 'Achieved']
         
-        with st.container():
-            if achieved_goals:
-                st.balloons() # Celebrate achievements!
-                for goal in achieved_goals:
-                    with st.container():
-                        col_achieved, col_delete = st.columns([5, 1])
-                        with col_achieved:
-                            st.markdown(f"**{goal.get('title')}** (Achieved)")
-                        with col_delete:
-                            # The button now only sets the session_state key when clicked
-                            st.button(
-                                "Delete", 
-                                key=f"delete_goal_{goal['id']}"
-                            )
-            else:
-                st.info("Keep working! Achieved goals will appear here.")
+        if achieved_goals:
+            for goal in achieved_goals:
+                with st.container(border=True):
+                    st.markdown(f"### 🎉 {goal.get('title', 'Untitled Goal')}")
+                    # Convert timestamp to human-readable date for achieved context (using created_at as proxy for completed date)
+                    creation_time = datetime.fromtimestamp(goal.get('created_at', 0)).strftime('%Y-%m-%d')
+                    st.caption(f"Created: {creation_time}") 
+                    
+                    # Button to delete goal (clean up list)
+                    # Logic handled at the top of display_main_app
+                    st.button(
+                        "Delete from List", 
+                        key=f"delete_goal_{goal['id']}", 
+                        help="Permanently delete this goal record."
+                    )
+        else:
+            st.info("No goals achieved yet. Keep going!")
 
 
-# --- Main Application Logic ---
+# --- 8. Main Application Logic ---
 
-if __name__ == '__main__':
-    if st.session_state.logged_in:
-        display_main_app()
-    else:
-        display_auth_page()
+if st.session_state.logged_in:
+    display_main_app()
+else:
+    display_auth_page()
+
