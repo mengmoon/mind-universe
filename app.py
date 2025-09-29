@@ -294,7 +294,17 @@ def delete_goal(goal_id):
     except Exception as e:
         st.error(f"Failed to delete goal: {e}")
 
-# --- 5. LLM API Call Functions (Gemini Text and Structured Output) ---
+# --- 5. Streamlit Callback Wrappers (Fixing the Button Error) ---
+
+def handle_achieve_goal_click(goal_id):
+    """Wrapper for 'Mark Achieved' button click."""
+    update_goal_status(goal_id, "Achieved")
+
+def handle_delete_goal_click(goal_id):
+    """Wrapper for 'Delete' button click."""
+    delete_goal(goal_id)
+
+# --- 6. LLM API Call Functions (Gemini Text and Structured Output) ---
 
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
@@ -419,7 +429,7 @@ def generate_journal_analysis(journal_text_block):
     return call_gemini_api(payload, is_json_response=False) or "Analysis failed to complete."
 
 
-# --- 6. UI Components and Pages ---
+# --- 7. UI Components and Pages ---
 
 st.set_page_config(layout="wide", page_title="Mind Universe: Wellness & AI")
 
@@ -484,7 +494,7 @@ def display_main_app():
         st.divider()
         st.subheader("Data Management")
         
-        # Download/Export function (updated to include goals)
+        # Download/Export function
         def generate_export_content():
             export_text = f"--- Mind Universe Data Export for User: {st.session_state.current_user_email} ---\n"
             export_text += f"Export Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -581,7 +591,7 @@ def display_main_app():
                     st.info("Deletion cancelled.")
                     st.rerun()
 
-    # --- Navigation (Updated with Goals) ---
+    # --- Navigation ---
     view_options = ["💬 AI Mentor", "✍️ Wellness Journal", "📊 Insights", "🎯 Goal Tracker"]
     
     selected_view = st.radio(
@@ -775,8 +785,14 @@ def display_main_app():
                         if goal.get('description'):
                             st.markdown(f"> *{goal.get('description')}*")
                     with col_button:
-                        if st.button("Mark Achieved 🎉", key=f"achieve_{goal['id']}", type="success"):
-                            update_goal_status(goal['id'], "Achieved")
+                        # FIX: Using on_click callback for robust reruns
+                        st.button(
+                            "Mark Achieved 🎉", 
+                            key=f"achieve_{goal['id']}", 
+                            type="success",
+                            on_click=handle_achieve_goal_click,
+                            args=(goal['id'],) 
+                        )
         else:
             st.info("You currently have no active goals. Time to set one!")
 
@@ -792,8 +808,14 @@ def display_main_app():
                     with col_achieved:
                         st.markdown(f"**{goal.get('title')}** (Achieved)")
                     with col_delete:
-                        if st.button("Delete", key=f"delete_{goal['id']}", type="secondary"):
-                            delete_goal(goal['id'])
+                        # FIX: Using on_click callback for robust reruns
+                        st.button(
+                            "Delete", 
+                            key=f"delete_{goal['id']}", 
+                            type="secondary",
+                            on_click=handle_delete_goal_click,
+                            args=(goal['id'],) 
+                        )
         else:
             st.info("Keep working! Achieved goals will appear here.")
 
