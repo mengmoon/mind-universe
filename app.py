@@ -264,31 +264,44 @@ def save_new_goal(title, description):
         st.error(f"Failed to save goal: {e}")
 
 def update_goal_status(goal_id, new_status):
-    """Updates the status of a specific goal. Removed st.rerun() here."""
+    """
+    Updates the status of a specific goal in Firestore and updates the session state in place.
+    NOTE: Removed explicit st.rerun().
+    """
     try:
         goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
         goal_doc_ref = goals_ref.document(goal_id)
         
-        # Only update status
+        # 1. Update Firestore
         goal_doc_ref.update({"status": new_status})
-        st.success(f"Goal status updated to {new_status}!")
         
-        # Force reload goals (Streamlit will detect state change and rerun cleanly)
-        _, _, new_goals_data = load_data_from_firestore(st.session_state.current_user_email)
-        st.session_state.goals = new_goals_data
+        # 2. Update Session State in place (Critical for avoiding button key conflict)
+        for goal in st.session_state.goals:
+            if goal.get('id') == goal_id:
+                goal['status'] = new_status
+                break
+                
+        st.success(f"Goal status updated to {new_status}!")
+        # The change in st.session_state.goals will automatically trigger a clean rerun.
     except Exception as e:
         st.error(f"Failed to update goal status: {e}")
 
 def delete_goal(goal_id):
-    """Deletes a specific goal. Removed st.rerun() here."""
+    """
+    Deletes a specific goal from Firestore and updates the session state in place.
+    NOTE: Removed explicit st.rerun().
+    """
     try:
         goals_ref = get_user_goals_collection_ref(st.session_state.current_user_email)
-        goals_ref.document(goal_id).delete()
-        st.success("Goal deleted successfully.")
         
-        # Force reload goals (Streamlit will detect state change and rerun cleanly)
-        _, _, new_goals_data = load_data_from_firestore(st.session_state.current_user_email)
-        st.session_state.goals = new_goals_data
+        # 1. Delete from Firestore
+        goals_ref.document(goal_id).delete()
+        
+        # 2. Update Session State in place (Critical for avoiding button key conflict)
+        st.session_state.goals = [g for g in st.session_state.goals if g.get('id') != goal_id]
+        
+        st.success("Goal deleted successfully.")
+        # The change in st.session_state.goals will automatically trigger a clean rerun.
     except Exception as e:
         st.error(f"Failed to delete goal: {e}")
 
@@ -783,7 +796,6 @@ def display_main_app():
                         if goal.get('description'):
                             st.markdown(f"> *{goal.get('description')}*")
                     with col_button:
-                        # FIX APPLIED: Using on_click callback without st.rerun() inside the handler function.
                         st.button(
                             "Mark Achieved 🎉", 
                             key=f"achieve_{goal['id']}", 
@@ -806,7 +818,6 @@ def display_main_app():
                     with col_achieved:
                         st.markdown(f"**{goal.get('title')}** (Achieved)")
                     with col_delete:
-                        # FIX APPLIED: Using on_click callback without st.rerun() inside the handler function.
                         st.button(
                             "Delete", 
                             key=f"delete_{goal['id']}", 
