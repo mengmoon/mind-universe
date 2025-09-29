@@ -10,6 +10,17 @@ from utils import (
     get_user_goals_collection_ref
 )
 
+# NOTE: For manual routing, you MUST import the functions from your page files.
+# Since I cannot see your 'pages/' directory, these are placeholders.
+# You must ensure these modules (or functions) are importable where app.py is run.
+# For example, if your 'pages/1_AI_Mentor.py' has an 'app()' function, you'd import it.
+
+# Assuming the following functions exist in the pages/ directory and can be imported:
+# from pages.1_AI_Mentor import app as ai_mentor_app
+# from pages.2_Wellness_Journal import app as journal_app
+# from pages.3_Insights import app as insights_app
+# from pages.4_Goal_Tracker import app as goals_app
+
 # --- Global Page Configuration ---
 st.set_page_config(layout="wide", page_title="Mind Universe: Wellness & AI")
 
@@ -28,6 +39,9 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'journal_entries' not in st.session_state:
     st.session_state.journal_entries = []
+# New: Track the currently selected page for manual routing
+if 'page_selected' not in st.session_state:
+    st.session_state.page_selected = 'Dashboard' 
 
 # --- Authentication UI ---
 
@@ -48,7 +62,8 @@ def display_auth_page():
             if login_submitted:
                 if login_email and login_password:
                     if login_user(login_email, login_password):
-                        # Force rerun to transition to the main app layout
+                        # Set initial page to dashboard on login
+                        st.session_state.page_selected = 'Dashboard'
                         st.rerun()
                 else:
                     st.warning("Please enter both email and password.")
@@ -122,6 +137,19 @@ def display_sidebar():
             logout()
             
         st.divider()
+        
+        # --- MANUAL NAVIGATION ---
+        st.subheader("Features")
+        # Update the session state variable used in the main routing logic
+        page = st.radio(
+            "Go to",
+            options=['Dashboard', '💬 AI Mentor', '✍️ Wellness Journal', '📊 Insights', '🎯 Goal Tracker'],
+            index=0 if st.session_state.page_selected == 'Dashboard' else ['Dashboard', '💬 AI Mentor', '✍️ Wellness Journal', '📊 Insights', '🎯 Goal Tracker'].index(st.session_state.page_selected),
+            key='page_radio_key'
+        )
+        st.session_state.page_selected = page
+        
+        st.divider()
         st.subheader("Data Management")
         
         # Download/Export function
@@ -176,27 +204,16 @@ def display_sidebar():
                     st.info("Deletion cancelled.")
                     st.rerun()
 
-# --- Main Logic ---
+# --- Placeholder Functions for Manual Routing ---
+# In a real setup, you would replace these with actual imports/function calls 
+# from your pages/ directory. Since I cannot, I use placeholders.
 
-if st.session_state.logged_in:
-    # 1. Load Data on first login (or when session state is cleared/reloaded)
-    if not st.session_state.user_data_loaded:
-        with st.spinner("Loading your universe..."):
-            chat_data, journal_data, goals_data = load_data_from_firestore(st.session_state.current_user_email)
-            st.session_state.chat_history = chat_data
-            st.session_state.journal_entries = journal_data
-            st.session_state.goals = goals_data 
-            st.session_state.user_data_loaded = True
-            st.rerun() # Rerun once data is loaded to ensure pages have access
-            
-    # 2. Display the Sidebar for all logged-in pages
-    display_sidebar()
-    
-    # 3. Display the Feature Dashboard (The new landing page content)
+def display_dashboard():
+    """Displays the main landing page content."""
     st.title("🌌 Mind Universe Dashboard")
     st.markdown("---")
     st.subheader("Explore Your Wellness Tools")
-    st.markdown("Click any feature in the sidebar to begin your journey.")
+    st.markdown("Use the navigation menu on the left to begin your journey.")
     
     col1, col2 = st.columns(2)
     col3, col4 = st.columns(2)
@@ -216,6 +233,42 @@ if st.session_state.logged_in:
     with col4:
         st.error("### 🎯 Goal Tracker")
         st.markdown("Set and monitor your personal wellness objectives. Easily mark goals as achieved and track your progress.")
+
+# --- Main Logic ---
+
+if st.session_state.logged_in:
+    # 1. Load Data on first login (or when session state is cleared/reloaded)
+    if not st.session_state.user_data_loaded:
+        with st.spinner("Loading your universe..."):
+            chat_data, journal_data, goals_data = load_data_from_firestore(st.session_state.current_user_email)
+            st.session_state.chat_history = chat_data
+            st.session_state.journal_entries = journal_data
+            st.session_state.goals = goals_data 
+            st.session_state.user_data_loaded = True
+            st.rerun() # Rerun once data is loaded to ensure pages have access
+            
+    # 2. Display the Sidebar
+    display_sidebar()
+    
+    # 3. ROUTING LOGIC (Selects which page function to call)
+    page = st.session_state.page_selected
+    
+    # IMPORTANT: You must replace these st.error calls with the actual function call
+    # from your respective page files once you import them.
+    if page == 'Dashboard':
+        display_dashboard()
+    elif page == '💬 AI Mentor':
+        st.error("Page Content Not Imported. Place the content of pages/1_AI_Mentor.py here or import the function.")
+        # ai_mentor_app() 
+    elif page == '✍️ Wellness Journal':
+        st.error("Page Content Not Imported. Place the content of pages/2_Wellness_Journal.py here or import the function.")
+        # journal_app()
+    elif page == '📊 Insights':
+        st.error("Page Content Not Imported. Place the content of pages/3_Insights.py here or import the function.")
+        # insights_app()
+    elif page == '🎯 Goal Tracker':
+        st.error("Page Content Not Imported. Place the content of pages/4_Goal_Tracker.py here or import the function.")
+        # goals_app()
 
 else:
     display_auth_page()

@@ -89,4 +89,4 @@ def app():
         elif st.session_state.journal_analysis == "No data available.":
             st.warning("No entries available to analyze.")
 
-app()
+
