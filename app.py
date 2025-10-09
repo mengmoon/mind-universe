@@ -80,8 +80,7 @@ if 'journal_entries' not in st.session_state:
     st.session_state.journal_entries = []
 if 'goals' not in st.session_state:
     st.session_state.goals = []
-if 'daily_prompt' not in st.session_state:
-    st.session_state.daily_prompt = None
+# st.session_state.daily_prompt is removed as it is no longer used
 if 'mentor_persona' not in st.session_state:
     st.session_state.mentor_persona = "Default"
 if 'confirm_delete' not in st.session_state:
@@ -160,7 +159,7 @@ def logout():
     st.session_state.chat_history = []
     st.session_state.journal_entries = []
     st.session_state.goals = []
-    st.session_state.daily_prompt = None
+    # st.session_state.daily_prompt is removed
     st.session_state.mentor_persona = "Default"
     st.session_state.confirm_delete = False
     st.info("You have been logged out.")
@@ -283,32 +282,7 @@ def update_goal_status(user_id, goal_id, completed):
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
-# The AI functions are unchanged as they are already dependent on external network calls,
-# but using st.session_state to cache the daily prompt helps avoid unnecessary API calls.
-
-# ... (generate_journal_prompt, analyze_journal_entry, generate_ai_text_reply remain unchanged)
-# The definitions for these functions are left out here for brevity but are present
-# in the full file below this section.
-
-# [NOTE: The remaining functions (6. Utility Functions and 7. UI Rendering Functions)
-# are modified below to incorporate the new, granular loading logic.]
-# -------------------------------------------------------------------------------
-
-def generate_journal_prompt():
-    """Generates a concise self-reflection prompt using Gemini."""
-    try:
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": "Generate a concise, insightful journal prompt for self-reflection. Example: 'What small victory are you celebrating today?'"}]}],
-            "generationConfig": {"maxOutputTokens": 50, "temperature": 0.9}
-        }
-        response = requests.post(GEMINI_API_URL, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-        response.raise_for_status()
-        result = response.json()
-        text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-        return text.strip() if text else "No prompt generated."
-    except Exception as e:
-        st.error(f"Error generating prompt: {e}")
-        return None
+# --- REMOVED generate_journal_prompt function ---
 
 def analyze_journal_entry(content):
     """Analyzes a journal entry for sentiment and themes using Gemini."""
@@ -592,14 +566,7 @@ def display_main_app():
                 st.session_state.journal_loaded = True
                 st.rerun() # Rerun to display loaded entries immediately
         
-        col_prompt, col_empty = st.columns([1, 4])
-        with col_prompt:
-            if st.button("Get a Journal Prompt", help="Generate a new idea for your entry."):
-                st.session_state.daily_prompt = generate_journal_prompt()
-                st.rerun()
-        
-        if st.session_state.daily_prompt:
-            st.info(f"**Prompt**: {st.session_state.daily_prompt}")
+        # --- UI for "Get a Journal Prompt" has been removed ---
         
         with st.form("journal_form", clear_on_submit=True):
             col1, col2 = st.columns([1, 3])
@@ -608,15 +575,14 @@ def display_main_app():
             with col2:
                 entry_title = st.text_input("Title (Optional)", placeholder="A brief summary of your entry")
             
-            entry_content = st.text_area("What's on your mind today?", value=st.session_state.daily_prompt or "", height=200, placeholder="Write freely...")
+            # The 'value' is now set to an empty string, as no prompt is generated
+            entry_content = st.text_area("What's on your mind today?", value="", height=200, placeholder="Write freely...")
             
             mood = st.selectbox("How are you feeling?", ["Happy", "Calm", "Excited", "Stressed", "Anxious", "Sad"])
             
             submitted = st.form_submit_button("Save Entry", type="primary")
             if submitted and entry_content:
                 save_journal_entry(entry_date.strftime('%Y-%m-%d'), entry_title, entry_content, mood)
-                # Clear prompt after saving
-                st.session_state.daily_prompt = None
                 st.rerun()
             elif submitted:
                 st.warning("Please write some content before saving.")
