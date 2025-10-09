@@ -1,0 +1,17 @@
+[theme]
+
+Primary color used for buttons, links, and selected elements (Soft blue)
+primaryColor="#4F8AF9"
+
+Background color for the app (Very light blue/grey for softness)
+backgroundColor="#F0F8FF"
+
+Color for elements on the primary background (Deep blue/green for calm contrast)
+secondaryBackgroundColor="#E0FFFF"
+
+Color used for text (Dark, readable grey)
+textColor="#2F4F4F"
+
+Font family
+font="sans serif"
+

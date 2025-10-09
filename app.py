@@ -80,11 +80,14 @@ if 'journal_entries' not in st.session_state:
     st.session_state.journal_entries = []
 if 'goals' not in st.session_state:
     st.session_state.goals = []
-# st.session_state.daily_prompt is removed as it is no longer used
 if 'mentor_persona' not in st.session_state:
     st.session_state.mentor_persona = "Default"
 if 'confirm_delete' not in st.session_state:
     st.session_state.confirm_delete = False
+    
+# --- NEW: State for Generated Prompt ---
+if 'generated_prompt' not in st.session_state:
+    st.session_state.generated_prompt = ""
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -159,9 +162,9 @@ def logout():
     st.session_state.chat_history = []
     st.session_state.journal_entries = []
     st.session_state.goals = []
-    # st.session_state.daily_prompt is removed
     st.session_state.mentor_persona = "Default"
     st.session_state.confirm_delete = False
+    st.session_state.generated_prompt = "" # Reset new state variable
     st.info("You have been logged out.")
     st.rerun()
 
@@ -282,8 +285,6 @@ def update_goal_status(user_id, goal_id, completed):
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
-# --- REMOVED generate_journal_prompt function ---
-
 def analyze_journal_entry(content):
     """Analyzes a journal entry for sentiment and themes using Gemini."""
     try:
@@ -299,6 +300,34 @@ def analyze_journal_entry(content):
     except Exception as e:
         st.error(f"Error analyzing journal: {e}")
         return None
+
+def generate_personalized_journal_prompt(goals_summary, recent_entries_summary):
+    """Generates a personalized journal prompt based on user goals and recent activity."""
+    context = ""
+    if goals_summary:
+        context += f"User Goals: {'; '.join(goals_summary)}. "
+    if recent_entries_summary:
+        context += f"Recent Mood/Activity Summary (Last 3 entries): {'; '.join(recent_entries_summary)}. "
+        
+    user_prompt = (
+        f"Based on the following context about the user's goals and recent activity, generate one concise, "
+        f"thought-provoking, and supportive journal prompt (max 50 words) to encourage self-reflection "
+        f"and alignment with their wellness journey. Context: {context}"
+    )
+
+    try:
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"maxOutputTokens": 80, "temperature": 0.9}
+        }
+        response = requests.post(GEMINI_API_URL, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
+        response.raise_for_status()
+        result = response.json()
+        text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        return text.strip() if text else "What is one small, positive step you can take today to move closer to a personal value?"
+    except Exception as e:
+        st.error(f"Error generating personalized prompt: {e}")
+        return "What is one small, positive step you can take today to move closer to a personal value?" # Default fallback
 
 def generate_ai_text_reply(user_prompt):
     """Handles the main chat generation with exponential backoff for retries."""
@@ -414,11 +443,11 @@ def generate_export_content():
     return export_text.encode('utf-8')
 
 
-# --- 7. UI Rendering Functions (Updated for Lazy Loading) ---
+# --- 7. UI Rendering Functions (Updated for Lazy Loading and Serene Theme) ---
 
 def display_auth_page():
     """Displays the login and sign up forms."""
-    st.title("🌌 Welcome to Mind Universe")
+    st.title("💧 Welcome to Mind Universe")
     st.subheader("Securely access your personal wellness space.")
     tab_login, tab_signup = st.tabs(["🔒 Login", "📝 Sign Up"])
     with tab_login:
@@ -454,7 +483,7 @@ def display_main_app():
             st.session_state.chat_history = load_chat_history(st.session_state.current_user_email)
             st.session_state.chat_loaded = True
 
-    st.title("🌌 Mind Universe")
+    st.title("🧘‍♀️ Mind Universe")
     st.caption(f"Welcome, {st.session_state.current_user_email} (ID: {st.session_state.current_user_email})")
 
     # --- Sidebar ---
@@ -509,6 +538,14 @@ def display_main_app():
         
         # --- Goal Setting ---
         st.subheader("Goal Setting")
+        # PERFORMANCE OPTIMIZATION: Load goals only when rendering the sidebar section
+        if not st.session_state.goals_loaded:
+            with st.spinner("Loading goals..."):
+                st.session_state.goals = load_goals(st.session_state.current_user_email)
+                st.session_state.goals_loaded = True
+                # If goals loaded, we rerun to render them immediately
+                st.rerun() 
+        
         with st.form("goal_form", clear_on_submit=True):
             goal_text = st.text_input("Set a new goal")
             deadline = st.date_input("Deadline (optional)", value=None)
@@ -521,13 +558,6 @@ def display_main_app():
         
         st.subheader("Your Goals")
         
-        # PERFORMANCE OPTIMIZATION: Load goals only when rendering the sidebar section
-        if not st.session_state.goals_loaded:
-            with st.spinner("Loading goals..."):
-                st.session_state.goals = load_goals(st.session_state.current_user_email)
-                st.session_state.goals_loaded = True
-                st.rerun() # Rerun to display loaded goals immediately
-
         if st.session_state.goals:
             for goal in st.session_state.goals:
                 col1, col2 = st.columns([3, 1])
@@ -566,8 +596,25 @@ def display_main_app():
                 st.session_state.journal_loaded = True
                 st.rerun() # Rerun to display loaded entries immediately
         
-        # --- UI for "Get a Journal Prompt" has been removed ---
-        
+        # --- Personalized Journal Prompt Generator ---
+        st.subheader("Need a topic?")
+        if st.button("✨ Generate Personalized Prompt", type="secondary"):
+            with st.spinner("Reflecting on your journey and goals..."):
+                # 1. Prepare context summaries (loading goals/journal is handled by lazy loading elsewhere)
+                goals_summary = [f"{g['text']} (Due: {g.get('deadline', 'None')}, Status: {'Completed' if g['completed'] else 'Pending'})" for g in st.session_state.goals]
+                recent_entries_summary = []
+                for entry in st.session_state.journal_entries[:3]: # Take up to 3 most recent entries
+                     recent_entries_summary.append(f"Date: {entry.get('date')}, Mood: {entry.get('mood')}, Title: {entry.get('title', 'Untitled')}")
+                
+                # 2. Generate prompt
+                prompt_text = generate_personalized_journal_prompt(goals_summary, recent_entries_summary)
+                
+                # 3. Store and Rerun to pre-fill the text area
+                if prompt_text:
+                    st.session_state.generated_prompt = prompt_text
+                    st.rerun()
+
+        # --- Journal Form ---
         with st.form("journal_form", clear_on_submit=True):
             col1, col2 = st.columns([1, 3])
             with col1:
@@ -575,14 +622,27 @@ def display_main_app():
             with col2:
                 entry_title = st.text_input("Title (Optional)", placeholder="A brief summary of your entry")
             
-            # The 'value' is now set to an empty string, as no prompt is generated
-            entry_content = st.text_area("What's on your mind today?", value="", height=200, placeholder="Write freely...")
+            # Use the generated_prompt from session state as the initial value
+            entry_content = st.text_area(
+                "What's on your mind today?", 
+                value=st.session_state.generated_prompt, 
+                height=200, 
+                placeholder="Write freely..."
+            )
+            
+            # IMPORTANT: Reset the generated prompt after it's used to avoid re-populating on subsequent, unprompted submissions
+            if st.session_state.generated_prompt:
+                 # Check if the text area still contains the generated prompt before clearing the state variable
+                 if entry_content == st.session_state.generated_prompt:
+                    st.session_state.generated_prompt = "" 
             
             mood = st.selectbox("How are you feeling?", ["Happy", "Calm", "Excited", "Stressed", "Anxious", "Sad"])
             
             submitted = st.form_submit_button("Save Entry", type="primary")
             if submitted and entry_content:
                 save_journal_entry(entry_date.strftime('%Y-%m-%d'), entry_title, entry_content, mood)
+                # Clear the generated prompt explicitly in case of submission
+                st.session_state.generated_prompt = ""
                 st.rerun()
             elif submitted:
                 st.warning("Please write some content before saving.")
@@ -633,7 +693,8 @@ def display_main_app():
                 # Set date as index for chronological charting
                 df = df.set_index("Date") 
                 
-                st.line_chart(df, y="Mood Score", color="#4CAF50")
+                # Chart color changed to a calming blue/green color for serenity
+                st.line_chart(df, y="Mood Score", color="#6495ED") 
                 
                 # Show key for scores
                 st.markdown("Mood Score Key: 5=Happy, 3=Calm, 0=Sad")
@@ -660,7 +721,8 @@ def display_main_app():
         # Display chat history (already loaded at the start)
         for message in st.session_state.chat_history:
             role = "user" if message["role"] == "user" else "assistant"
-            avatar = "👤" if role == "user" else "🧠"
+            # Updated avatars for a serene feel
+            avatar = "👤" if role == "user" else "💡"
             with st.chat_message(role, avatar=avatar):
                 st.markdown(message["content"])
         
@@ -674,7 +736,7 @@ def display_main_app():
             save_chat_message("user", prompt)
             
             # 3. Generate AI response
-            with st.chat_message("assistant", avatar="🧠"):
+            with st.chat_message("assistant", avatar="💡"):
                 with st.spinner(f"Mind Mentor ({st.session_state.mentor_persona}) is reflecting..."):
                     ai_response_text = generate_ai_text_reply(prompt)
                     
@@ -687,7 +749,17 @@ def display_main_app():
 
 # --- Main Application Logic ---
 if __name__ == '__main__':
-    if st.session_state.logged_in:
-        display_main_app()
-    else:
-        display_auth_page()
+    # Streamlit requires a consistent way to handle errors if secrets are missing
+    try:
+        # Check if the global variables are available, which they must be if secrets are loaded
+        if 'firebaseConfig' in globals() and firebaseConfig:
+            # Set the page configuration for wide mode and a soothing title
+            st.set_page_config(layout="wide", page_title="Mind Universe: Serene Wellness")
+            
+            if st.session_state.logged_in:
+                display_main_app()
+            else:
+                display_auth_page()
+    except Exception as e:
+        # Catch-all for configuration issues outside of initial load blocks
+        st.error(f"Application failed to start due to configuration issues: {e}")
