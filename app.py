@@ -1,6 +1,6 @@
 # --- Mind Universe: A Digital Space for Mental Wellness and Self-Exploration ---
 # Uses Streamlit for the UI, Firebase for secure data persistence, and
-# Google Gemini API for AI chat (text only) and Journal Analysis/Prompts.
+# Google Gemini API for AI chat (text only) and Journal Analysis.
 
 import streamlit as st
 import requests
@@ -85,9 +85,7 @@ if 'mentor_persona' not in st.session_state:
 if 'confirm_delete' not in st.session_state:
     st.session_state.confirm_delete = False
     
-# --- NEW: State for Generated Prompt ---
-if 'generated_prompt' not in st.session_state:
-    st.session_state.generated_prompt = ""
+# NOTE: Removed 'generated_prompt' from session state
 
 def hash_password(password):
     """Simple password hashing simulation using SHA-256."""
@@ -164,7 +162,7 @@ def logout():
     st.session_state.goals = []
     st.session_state.mentor_persona = "Default"
     st.session_state.confirm_delete = False
-    st.session_state.generated_prompt = "" # Reset new state variable
+    # NOTE: Removed clearing 'generated_prompt'
     st.info("You have been logged out.")
     st.rerun()
 
@@ -301,33 +299,7 @@ def analyze_journal_entry(content):
         st.error(f"Error analyzing journal: {e}")
         return None
 
-def generate_personalized_journal_prompt(goals_summary, recent_entries_summary):
-    """Generates a personalized journal prompt based on user goals and recent activity."""
-    context = ""
-    if goals_summary:
-        context += f"User Goals: {'; '.join(goals_summary)}. "
-    if recent_entries_summary:
-        context += f"Recent Mood/Activity Summary (Last 3 entries): {'; '.join(recent_entries_summary)}. "
-        
-    user_prompt = (
-        f"Based on the following context about the user's goals and recent activity, generate one concise, "
-        f"thought-provoking, and supportive journal prompt (max 50 words) to encourage self-reflection "
-        f"and alignment with their wellness journey. Context: {context}"
-    )
-
-    try:
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"maxOutputTokens": 80, "temperature": 0.9}
-        }
-        response = requests.post(GEMINI_API_URL, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-        response.raise_for_status()
-        result = response.json()
-        text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-        return text.strip() if text else "What is one small, positive step you can take today to move closer to a personal value?"
-    except Exception as e:
-        st.error(f"Error generating personalized prompt: {e}")
-        return "What is one small, positive step you can take today to move closer to a personal value?" # Default fallback
+# NOTE: The generate_personalized_journal_prompt function has been removed.
 
 def generate_ai_text_reply(user_prompt):
     """Handles the main chat generation with exponential backoff for retries."""
@@ -596,24 +568,8 @@ def display_main_app():
                 st.session_state.journal_loaded = True
                 st.rerun() # Rerun to display loaded entries immediately
         
-        # --- Personalized Journal Prompt Generator ---
-        st.subheader("Need a topic?")
-        if st.button("✨ Generate Personalized Prompt", type="secondary"):
-            with st.spinner("Reflecting on your journey and goals..."):
-                # 1. Prepare context summaries (loading goals/journal is handled by lazy loading elsewhere)
-                goals_summary = [f"{g['text']} (Due: {g.get('deadline', 'None')}, Status: {'Completed' if g['completed'] else 'Pending'})" for g in st.session_state.goals]
-                recent_entries_summary = []
-                for entry in st.session_state.journal_entries[:3]: # Take up to 3 most recent entries
-                     recent_entries_summary.append(f"Date: {entry.get('date')}, Mood: {entry.get('mood')}, Title: {entry.get('title', 'Untitled')}")
-                
-                # 2. Generate prompt
-                prompt_text = generate_personalized_journal_prompt(goals_summary, recent_entries_summary)
-                
-                # 3. Store and Rerun to pre-fill the text area
-                if prompt_text:
-                    st.session_state.generated_prompt = prompt_text
-                    st.rerun()
-
+        # NOTE: Removed the "Generate Personalized Prompt" button and logic.
+        
         # --- Journal Form ---
         with st.form("journal_form", clear_on_submit=True):
             col1, col2 = st.columns([1, 3])
@@ -622,27 +578,19 @@ def display_main_app():
             with col2:
                 entry_title = st.text_input("Title (Optional)", placeholder="A brief summary of your entry")
             
-            # Use the generated_prompt from session state as the initial value
+            # Text area now uses a standard placeholder value
             entry_content = st.text_area(
                 "What's on your mind today?", 
-                value=st.session_state.generated_prompt, 
+                value="", 
                 height=200, 
                 placeholder="Write freely..."
             )
-            
-            # IMPORTANT: Reset the generated prompt after it's used to avoid re-populating on subsequent, unprompted submissions
-            if st.session_state.generated_prompt:
-                 # Check if the text area still contains the generated prompt before clearing the state variable
-                 if entry_content == st.session_state.generated_prompt:
-                    st.session_state.generated_prompt = "" 
             
             mood = st.selectbox("How are you feeling?", ["Happy", "Calm", "Excited", "Stressed", "Anxious", "Sad"])
             
             submitted = st.form_submit_button("Save Entry", type="primary")
             if submitted and entry_content:
                 save_journal_entry(entry_date.strftime('%Y-%m-%d'), entry_title, entry_content, mood)
-                # Clear the generated prompt explicitly in case of submission
-                st.session_state.generated_prompt = ""
                 st.rerun()
             elif submitted:
                 st.warning("Please write some content before saving.")
